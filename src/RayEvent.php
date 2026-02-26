@@ -23,7 +23,7 @@ readonly class RayEvent
     public static function create(
         string $type,
         array $payload,
-        CarbonImmutable $publishAt,
+        ?CarbonImmutable $publishAt = null,
     ): self {
         return new self(
             id: Uuid::uuid7(),
@@ -31,7 +31,7 @@ readonly class RayEvent
             status: RayEventStatus::pending,
             payload: $payload,
             createdAt: CarbonImmutable::now(),
-            publishAt: $publishAt,
+            publishAt: $publishAt ?? CarbonImmutable::now(),
         );
     }
 

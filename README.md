@@ -1,5 +1,7 @@
 # ☀️ php-ray
 
+> *Hit the road jack, and don't you come back… unless it's via Ray*
+
 A lightweight, framework-agnostic event system for PHP 8.4+ built around the **transactional outbox pattern**.
 
 Events are first written to a durable store (in-memory or SQL), then dispatched to subscribers by a processor. This decouples publishing from handling and makes event delivery reliable across process boundaries.
@@ -39,7 +41,7 @@ composer require tcds-io/php-ray
                                                                        │ of(type)
                                                            ┌───────────▼───────────┐
                                                            │    EventSubscriber    │
-                                                           │   (holds callables)   │
+                                                           │   (holds callables)  │
                                                            └───────────────────────┘
 ```
 
