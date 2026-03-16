@@ -18,7 +18,7 @@ class SqliteEventStoreSchema
             <<<SQL
                 CREATE TABLE IF NOT EXISTS event_outbox (
                     id         TEXT NOT NULL PRIMARY KEY,
-                    type       TEXT NOT NULL,
+                    name       TEXT NOT NULL,
                     status     TEXT NOT NULL,
                     payload    TEXT NOT NULL,
                     created_at TEXT NOT NULL,

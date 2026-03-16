@@ -18,11 +18,11 @@ class RayEventTest extends TestCase
         self::assertInstanceOf(RayEvent::class, $event);
     }
 
-    public function test_create_sets_type(): void
+    public function test_create_sets_name(): void
     {
         $event = RayEvent::create('order.placed', [], CarbonImmutable::now());
 
-        self::assertSame('order.placed', $event->type);
+        self::assertSame('order.placed', $event->name);
     }
 
     public function test_create_sets_payload(): void
@@ -72,11 +72,11 @@ class RayEventTest extends TestCase
         self::assertSame('custom-id-123', $event->id);
     }
 
-    public function test_retrieve_preserves_type(): void
+    public function test_retrieve_preserves_name(): void
     {
-        $event = $this->makeRetrievedEvent(type: 'payment.failed');
+        $event = $this->makeRetrievedEvent(name: 'payment.failed');
 
-        self::assertSame('payment.failed', $event->type);
+        self::assertSame('payment.failed', $event->name);
     }
 
     public function test_retrieve_preserves_status(): void
@@ -114,7 +114,7 @@ class RayEventTest extends TestCase
 
     private function makeRetrievedEvent(
         string $id = 'test-id',
-        string $type = 'order.placed',
+        string $name = 'order.placed',
         RayEventStatus $status = RayEventStatus::pending,
         array $payload = [],
         ?CarbonImmutable $createdAt = null,
@@ -122,7 +122,7 @@ class RayEventTest extends TestCase
     ): RayEvent {
         return RayEvent::retrieve(
             id: $id,
-            type: $type,
+            name: $name,
             status: $status,
             payload: $payload,
             createdAt: $createdAt ?? CarbonImmutable::now(),

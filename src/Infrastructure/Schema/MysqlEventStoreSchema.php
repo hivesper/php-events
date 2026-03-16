@@ -20,7 +20,7 @@ class MysqlEventStoreSchema
             creationQuery: <<<SQL
                 CREATE TABLE event_outbox (
                     id           VARCHAR(32)  NOT NULL PRIMARY KEY,
-                    type         VARCHAR(255) NOT NULL,
+                    name         VARCHAR(255) NOT NULL,
                     status       VARCHAR(255) NOT NULL,
                     payload      JSON         NOT NULL,
                     created_at   DATETIME     NOT NULL,
