@@ -38,7 +38,7 @@ class MysqlEventStoreSchema
             creationQuery: <<<SQL
                 CREATE TABLE event_outbox_status (
                     event_id      VARCHAR(32) NOT NULL,
-                    status        JSON        NOT NULL,
+                    status        VARCHAR(255) NOT NULL,
                     error_message TEXT,
                     created_at    DATETIME    NOT NULL,
 
