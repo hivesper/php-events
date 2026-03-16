@@ -5,11 +5,11 @@ namespace Tcds\Io\Ray\Infrastructure;
 use Override;
 use Tcds\Io\Ray\EventProcessor;
 use Tcds\Io\Ray\EventStore;
-use Tcds\Io\Ray\EventSubscriber;
+use Tcds\Io\Ray\EventSubscriberMap;
 
 readonly class SequentialEventProcessor implements EventProcessor
 {
-    public function __construct(private EventSubscriber $subscribers)
+    public function __construct(private EventSubscriberMap $subscribers)
     {
     }
 

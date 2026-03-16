@@ -3,7 +3,7 @@
 namespace Test\Tcds\Io\Ray\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\EventSubscriber;
+use Tcds\Io\Ray\EventSubscriberMap;
 use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
 use Tcds\Io\Ray\Infrastructure\SequentialEventProcessor;
 use Tcds\Io\Ray\RayEvent;
@@ -12,13 +12,13 @@ use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
 class SequentialEventProcessorTest extends TestCase
 {
     private InMemoryEventStore $store;
-    private EventSubscriber $subscribers;
+    private EventSubscriberMap $subscribers;
     private SequentialEventProcessor $processor;
 
     protected function setUp(): void
     {
         $this->store = new InMemoryEventStore();
-        $this->subscribers = new EventSubscriber();
+        $this->subscribers = new EventSubscriberMap();
         $this->processor = new SequentialEventProcessor($this->subscribers);
     }
 
