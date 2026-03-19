@@ -2,16 +2,28 @@
 
 namespace Tcds\Io\Ray;
 
+use Carbon\CarbonImmutable;
+
 readonly class EventPublisher
 {
-    public function __construct(private EventStore $store)
-    {
+    public function __construct(
+        private EventStore $store,
+        private EventSerializer $serializer,
+    ) {
     }
 
-    public function publish(RayEvent $event): string
+    public function publish(object $event, ?CarbonImmutable $publishAt = null): string
     {
-        $this->store->add($event);
+        $serialized = $this->serializer->serialize($event);
 
-        return $event->id;
+        $rayEvent = RayEvent::create(
+            name: $serialized->name,
+            payload: $serialized->payload,
+            publishAt: $publishAt,
+        );
+
+        $this->store->add($rayEvent);
+
+        return $rayEvent->id;
     }
 }

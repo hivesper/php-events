@@ -51,14 +51,14 @@ class SqlEventStoreTest extends TestCase
         self::assertSame($event->id, $retrieved->id);
     }
 
-    public function test_next_returns_correct_type(): void
+    public function test_next_returns_correct_name(): void
     {
         $this->store->add(self::createEvent('payment.received'));
 
         $retrieved = $this->store->next();
 
         self::assertNotNull($retrieved);
-        self::assertSame('payment.received', $retrieved->type);
+        self::assertSame('payment.received', $retrieved->name);
     }
 
     public function test_next_returns_correct_payload(): void
@@ -93,8 +93,8 @@ class SqlEventStoreTest extends TestCase
 
         self::assertNotNull($first);
         self::assertNotNull($second);
-        self::assertSame('a', $first->type);
-        self::assertSame('b', $second->type);
+        self::assertSame('a', $first->name);
+        self::assertSame('b', $second->name);
     }
 
     public function test_next_only_returns_events_whose_publish_at_is_in_the_past(): void
@@ -136,12 +136,12 @@ class SqlEventStoreTest extends TestCase
      * @param array<string, mixed> $payload
      */
     private static function createEvent(
-        string $type,
+        string $name,
         array $payload = [],
         ?CarbonImmutable $publishAt = null,
     ): RayEvent {
         return RayEvent::create(
-            type: $type,
+            name: $name,
             payload: $payload,
             publishAt: $publishAt ?? CarbonImmutable::now()->subSecond(),
         );

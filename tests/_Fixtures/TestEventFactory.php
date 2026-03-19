@@ -13,7 +13,7 @@ class TestEventFactory
      */
     public static function retrieveOrderPlaced(array $payload = []): RayEvent
     {
-        return self::retrieve(type: 'order.placed', payload: $payload);
+        return self::retrieve(name: 'order.placed', payload: $payload);
     }
 
     /**
@@ -21,17 +21,17 @@ class TestEventFactory
      */
     public static function retrievePaymentReceived(array $payload = []): RayEvent
     {
-        return self::retrieve(type: 'payment.received', payload: $payload);
+        return self::retrieve(name: 'payment.received', payload: $payload);
     }
 
     /**
      * @param array<string, mixed> $payload
      */
-    public static function retrieve(string $type, array $payload = []): RayEvent
+    public static function retrieve(string $name, array $payload = []): RayEvent
     {
         return RayEvent::retrieve(
             id: uniqid(),
-            type: $type,
+            name: $name,
             status: RayEventStatus::pending,
             payload: $payload,
             createdAt: CarbonImmutable::now(),

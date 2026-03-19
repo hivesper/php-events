@@ -32,14 +32,14 @@ readonly class SqlEventStore implements EventStore
     {
         $stmt = $this->connection->prepare(
             <<<SQL
-            INSERT INTO event_outbox (id, type, status, payload, created_at, publish_at)
-                VALUES (:id, :type, :status, :payload, :created_at, :publish_at)
+            INSERT INTO event_outbox (id, name, status, payload, created_at, publish_at)
+                VALUES (:id, :name, :status, :payload, :created_at, :publish_at)
             SQL,
         );
 
         $stmt->execute([
             'id' => $event->id,
-            'type' => $event->type,
+            'name' => $event->name,
             'status' => $event->status->value,
             'payload' => json_encode($event->payload, JSON_THROW_ON_ERROR),
             'created_at' => $event->createdAt->format('Y-m-d H:i:s.u'),
@@ -60,7 +60,7 @@ readonly class SqlEventStore implements EventStore
 
         $stmt = $this->connection->prepare(
             <<<SQL
-                SELECT id, type, status, payload, created_at, publish_at
+                SELECT id, name, status, payload, created_at, publish_at
                     FROM event_outbox WHERE
                         status = 'pending' AND
                         publish_at <= :now
@@ -73,7 +73,7 @@ readonly class SqlEventStore implements EventStore
             'now' => CarbonImmutable::now()->format('Y-m-d H:i:s'),
         ]);
 
-        /** @var array{id: string, type: string, status: string, payload: string, created_at: string, publish_at: string}|false $row */
+        /** @var array{id: string, name: string, status: string, payload: string, created_at: string, publish_at: string}|false $row */
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if ($row === false) {
@@ -89,7 +89,7 @@ readonly class SqlEventStore implements EventStore
 
         return RayEvent::retrieve(
             id: $row['id'],
-            type: $row['type'],
+            name: $row['name'],
             status: RayEventStatus::from($row['status']),
             payload: $payload,
             createdAt: new CarbonImmutable($row['created_at']),
@@ -99,7 +99,7 @@ readonly class SqlEventStore implements EventStore
 
     private function ensureOutboxSchema(): void
     {
-        $driver = $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $driver = $this->driverName();
 
         match ($driver) {
             'mysql' => MysqlEventStoreSchema::create($this->connection),
@@ -110,11 +110,17 @@ readonly class SqlEventStore implements EventStore
 
     private function lockingClause(): string
     {
-        $driver = $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
-
-        return match ($driver) {
+        return match ($this->driverName()) {
             'mysql' => 'FOR UPDATE SKIP LOCKED',
             default => '',
         };
+    }
+
+    private function driverName(): string
+    {
+        $driver = $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
+        assert(is_string($driver));
+
+        return $driver;
     }
 }

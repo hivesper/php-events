@@ -3,22 +3,24 @@
 namespace Test\Tcds\Io\Ray\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\EventSubscriber;
+use Tcds\Io\Ray\EventHydrator;
+use Tcds\Io\Ray\EventSubscriberMap;
+use Tcds\Io\Ray\HandlerResolver;
 use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
 use Tcds\Io\Ray\Infrastructure\SequentialEventProcessor;
-use Tcds\Io\Ray\RayEvent;
 use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
+use Test\Tcds\Io\Ray\_Fixtures\TrackingListener;
 
 class SequentialEventProcessorTest extends TestCase
 {
     private InMemoryEventStore $store;
-    private EventSubscriber $subscribers;
+    private EventSubscriberMap $subscribers;
     private SequentialEventProcessor $processor;
 
     protected function setUp(): void
     {
         $this->store = new InMemoryEventStore();
-        $this->subscribers = new EventSubscriber();
+        $this->subscribers = new EventSubscriberMap();
         $this->processor = new SequentialEventProcessor($this->subscribers);
     }
 
@@ -34,19 +36,18 @@ class SequentialEventProcessorTest extends TestCase
         self::assertFalse($called);
     }
 
-    public function test_dispatches_event_to_subscriber_matching_event_type(): void
+    public function test_dispatches_deserialized_payload_to_subscriber(): void
     {
-        $event = TestEventFactory::retrieveOrderPlaced();
-        $this->store->add($event);
+        $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 1]));
 
         $received = null;
-        $this->subscribers->subscribe('order.placed', function (RayEvent $e) use (&$received) {
+        $this->subscribers->subscribe('order.placed', function (object $e) use (&$received) {
             $received = $e;
         });
 
         $this->processor->process($this->store);
 
-        self::assertSame($event, $received);
+        self::assertSame(1, $received->order_id);
     }
 
     public function test_calls_all_subscribers_for_the_same_event_type(): void
@@ -71,20 +72,20 @@ class SequentialEventProcessorTest extends TestCase
         $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 1]));
         $this->store->add(TestEventFactory::retrievePaymentReceived(['amount' => 50]));
 
-        $orderPayload = null;
-        $paymentPayload = null;
+        $orderId = null;
+        $amount = null;
 
-        $this->subscribers->subscribe('order.placed', function (RayEvent $e) use (&$orderPayload) {
-            $orderPayload = $e->payload;
+        $this->subscribers->subscribe('order.placed', function (object $e) use (&$orderId) {
+            $orderId = $e->order_id;
         });
-        $this->subscribers->subscribe('payment.received', function (RayEvent $e) use (&$paymentPayload) {
-            $paymentPayload = $e->payload;
+        $this->subscribers->subscribe('payment.received', function (object $e) use (&$amount) {
+            $amount = $e->amount;
         });
 
         $this->processor->process($this->store);
 
-        self::assertSame(['order_id' => 1], $orderPayload);
-        self::assertSame(['amount' => 50], $paymentPayload);
+        self::assertSame(1, $orderId);
+        self::assertSame(50, $amount);
     }
 
     public function test_processes_all_queued_events(): void
@@ -94,8 +95,8 @@ class SequentialEventProcessorTest extends TestCase
         $this->store->add(TestEventFactory::retrieveOrderPlaced(['n' => 3]));
 
         $received = [];
-        $this->subscribers->subscribe('order.placed', function (RayEvent $e) use (&$received) {
-            $received[] = $e->payload['n'];
+        $this->subscribers->subscribe('order.placed', function (object $e) use (&$received) {
+            $received[] = $e->n;
         });
 
         $this->processor->process($this->store);
@@ -112,6 +113,23 @@ class SequentialEventProcessorTest extends TestCase
         self::assertTrue(true);
     }
 
+    public function test_invokes_class_string_subscriber_via_invoke(): void
+    {
+        $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 42]));
+
+        $listener = new TrackingListener();
+
+        $resolver = $this->createStub(HandlerResolver::class);
+        $resolver->method('resolve')->willReturn($listener);
+
+        $subscribers = new EventSubscriberMap(['order.placed' => [TrackingListener::class]]);
+        $processor = new SequentialEventProcessor($subscribers, $resolver);
+
+        $processor->process($this->store);
+
+        self::assertSame(42, $listener->received()->order_id);
+    }
+
     public function test_does_not_dispatch_to_subscriber_for_a_different_type(): void
     {
         $this->store->add(TestEventFactory::retrieveOrderPlaced());
@@ -125,4 +143,30 @@ class SequentialEventProcessorTest extends TestCase
 
         self::assertFalse($called);
     }
+
+    public function test_uses_hydrator_to_reconstruct_typed_domain_event(): void
+    {
+        $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 7]));
+
+        $typedEvent = new class (7) {
+            public function __construct(public readonly int $orderId) {}
+        };
+
+        $hydrator = $this->createMock(EventHydrator::class);
+        $hydrator->method('hydrate')
+            ->with('order.placed', ['order_id' => 7])
+            ->willReturn($typedEvent);
+
+        $received = null;
+        $subscribers = new EventSubscriberMap();
+        $subscribers->subscribe('order.placed', function (object $e) use (&$received) {
+            $received = $e;
+        });
+
+        $processor = new SequentialEventProcessor($subscribers, hydrator: $hydrator);
+        $processor->process($this->store);
+
+        self::assertSame($typedEvent, $received);
+    }
+
 }

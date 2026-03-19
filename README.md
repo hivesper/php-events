@@ -52,7 +52,7 @@ composer require tcds-io/php-ray
 | `EventPublisher` | Pushes a `RayEvent` into the store, returns its ID |
 | `EventSubscriber` | Registry of `type → callable[]` mappings |
 | `EventProcessor` | Interface — drains the store and dispatches to subscribers |
-| `EventSubscribeBuilder` | Fluent builder for assembling class-based listener maps |
+| `EventSubscriberBuilder` | Fluent builder that produces a ready-to-use `EventSubscriberMap` |
 
 ---
 
@@ -61,7 +61,7 @@ composer require tcds-io/php-ray
 ```php
 use Carbon\CarbonImmutable;
 use Tcds\Io\Ray\EventPublisher;
-use Tcds\Io\Ray\EventSubscriber;
+use Tcds\Io\Ray\EventSubscriberMap;
 use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
 use Tcds\Io\Ray\Infrastructure\SequentialEventProcessor;
 use Tcds\Io\Ray\RayEvent;
@@ -70,7 +70,7 @@ use Tcds\Io\Ray\RayEvent;
 $store     = new InMemoryEventStore();
 $publisher = new EventPublisher($store);
 
-$subscribers = new EventSubscriber();
+$subscribers = new EventSubscriberMap();
 $processor   = new SequentialEventProcessor($subscribers);
 
 // 2. Register subscribers
@@ -212,25 +212,21 @@ Multiple subscribers for the same type are called **in registration order**.
 
 ---
 
-## EventSubscribeBuilder
+## EventSubscriberBuilder
 
-A fluent builder for assembling class-based listener configuration maps (useful when resolving listeners from a DI container):
+A fluent builder that produces a ready-to-use `EventSubscriber`. Useful for wiring up callables in one place before handing the result to `SequentialEventProcessor`:
 
 ```php
-use Tcds\Io\Ray\EventSubscribeBuilder;
+use Tcds\Io\Ray\EventSubscriberBuilder;
 
-$map = EventSubscribeBuilder::create()
+$subscribers = EventSubscriberBuilder::create()
     ->eventType('order.placed',     [OrderPlacedHandler::class, AuditLogger::class])
     ->eventType('payment.received', [PaymentHandler::class])
     ->listener(NotificationService::class, types: ['order.placed', 'order.shipped'])
     ->build();
 
-// Returns:
-// [
-//   'order.placed'     => [OrderPlacedHandler::class, AuditLogger::class, NotificationService::class],
-//   'payment.received' => [PaymentHandler::class],
-//   'order.shipped'    => [NotificationService::class],
-// ]
+$processor = new SequentialEventProcessor($subscribers);
+$processor->process($store);
 ```
 
 Duplicate listener registrations are deduplicated automatically.

@@ -12,7 +12,7 @@ readonly class RayEvent
      */
     private function __construct(
         public string $id,
-        public string $type,
+        public string $name,
         public RayEventStatus $status,
         public array $payload,
         public CarbonImmutable $createdAt,
@@ -20,14 +20,17 @@ readonly class RayEvent
     ) {
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     public static function create(
-        string $type,
+        string $name,
         array $payload,
         ?CarbonImmutable $publishAt = null,
     ): self {
         return new self(
             id: Uuid::uuid7(),
-            type: $type,
+            name: $name,
             status: RayEventStatus::pending,
             payload: $payload,
             createdAt: CarbonImmutable::now(),
@@ -35,9 +38,12 @@ readonly class RayEvent
         );
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     public static function retrieve(
         string $id,
-        string $type,
+        string $name,
         RayEventStatus $status,
         array $payload,
         CarbonImmutable $createdAt,
@@ -45,7 +51,7 @@ readonly class RayEvent
     ): self {
         return new self(
             id: $id,
-            type: $type,
+            name: $name,
             status: $status,
             payload: $payload,
             createdAt: $createdAt,
