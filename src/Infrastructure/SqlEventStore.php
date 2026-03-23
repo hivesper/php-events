@@ -70,7 +70,7 @@ readonly class SqlEventStore implements EventStore
         );
 
         $stmt->execute([
-            'now' => CarbonImmutable::now()->format('Y-m-d H:i:s'),
+            'now' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
         ]);
 
         /** @var array{id: string, name: string, status: string, payload: string, created_at: string, publish_at: string}|false $row */

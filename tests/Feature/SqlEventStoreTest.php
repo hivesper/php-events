@@ -105,6 +105,25 @@ class SqlEventStoreTest extends TestCase
         self::assertNull($this->store->next());
     }
 
+    public function test_next_returns_event_whose_publish_at_is_milliseconds_in_the_past_within_same_second(): void
+    {
+        $now = CarbonImmutable::createFromFormat('Y-m-d H:i:s.u', '2024-01-01 12:00:00.800000');
+        CarbonImmutable::setTestNow($now);
+
+        try {
+            $publishAt = CarbonImmutable::createFromFormat('Y-m-d H:i:s.u', '2024-01-01 12:00:00.500000');
+            $event = self::createEvent('order.placed', [], $publishAt);
+            $this->store->add($event);
+
+            $retrieved = $this->store->next();
+
+            self::assertNotNull($retrieved);
+            self::assertSame($event->id, $retrieved->id);
+        } finally {
+            CarbonImmutable::setTestNow();
+        }
+    }
+
     public function test_next_returns_event_with_pending_status_from_db(): void
     {
         $this->store->add(self::createEvent('order.placed'));
