@@ -148,25 +148,55 @@ class SequentialEventProcessorTest extends TestCase
     {
         $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 7]));
 
-        $typedEvent = new class (7) {
-            public function __construct(public readonly int $orderId) {}
+        $typedEvent = new readonly class (7) {
+            public function __construct(public int $orderId) {}
+        };
+
+        $received = null;
+        $subscriber = function (object $e) use (&$received) {
+            $received = $e;
         };
 
         $hydrator = $this->createMock(EventHydrator::class);
         $hydrator->method('hydrate')
-            ->with('order.placed', ['order_id' => 7])
+            ->with('order.placed', ['order_id' => 7], $subscriber)
             ->willReturn($typedEvent);
 
-        $received = null;
         $subscribers = new EventSubscriberMap();
-        $subscribers->subscribe('order.placed', function (object $e) use (&$received) {
-            $received = $e;
-        });
+        $subscribers->subscribe('order.placed', $subscriber);
 
         $processor = new SequentialEventProcessor($subscribers, hydrator: $hydrator);
         $processor->process($this->store);
 
         self::assertSame($typedEvent, $received);
+    }
+
+    public function test_hydrates_once_per_subscriber_passing_subscriber_as_context(): void
+    {
+        $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 1]));
+
+        $subscriberA = function () {};
+        $subscriberB = function () {};
+
+        $hydrateCalls = [];
+        $hydrator = $this->createMock(EventHydrator::class);
+        $hydrator->expects($this->exactly(2))
+            ->method('hydrate')
+            ->willReturnCallback(function (string $name, array $payload, callable|string $subscriber) use (&$hydrateCalls): object {
+                $hydrateCalls[] = $subscriber;
+                return (object) $payload;
+            });
+
+        $subscribers = new EventSubscriberMap();
+        $subscribers->subscribe('order.placed', $subscriberA);
+        $subscribers->subscribe('order.placed', $subscriberB);
+
+        $processor = new SequentialEventProcessor($subscribers, hydrator: $hydrator);
+        $processor->process($this->store);
+
+        self::assertCount(2, $hydrateCalls);
+        self::assertSame($subscriberA, $hydrateCalls[0]);
+        self::assertSame($subscriberB, $hydrateCalls[1]);
     }
 
 }

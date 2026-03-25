@@ -24,10 +24,12 @@ readonly class SequentialEventProcessor implements EventProcessor
     #[Override] public function process(EventStore $store): void
     {
         while ($event = $store->next()) {
-            $domainEvent = $this->hydrator->hydrate($event->name, $event->payload);
-
             foreach ($this->subscribers->of($event->name) as $subscriber) {
-                ($this->resolver->resolve($subscriber))($domainEvent);
+                $callable = $this->resolver->resolve($subscriber);
+
+                $domainEvent = $this->hydrator->hydrate($event->name, $event->payload, $subscriber);
+
+                $callable($domainEvent);
             }
         }
     }

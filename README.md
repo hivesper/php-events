@@ -208,13 +208,13 @@ final class AppEventSerializer implements EventSerializer
 
 ## EventHydrator
 
-`EventHydrator` reconstructs a domain event object from the stored `name` and `payload` before it is dispatched to subscribers. `SequentialEventProcessor` calls it automatically.
+`EventHydrator` reconstructs a domain event object from the stored `name` and `payload`. `SequentialEventProcessor` calls it once per subscriber, passing the subscriber as the third argument so the hydrator can resolve a different type for each listener.
 
 ```php
 interface EventHydrator
 {
     /** @param array<string, mixed> $payload */
-    public function hydrate(string $name, array $payload): object;
+    public function hydrate(string $name, array $payload, callable|string $subscriber): object;
 }
 ```
 
@@ -239,7 +239,7 @@ use Tcds\Io\Ray\EventHydrator;
 
 final class AppEventHydrator implements EventHydrator
 {
-    public function hydrate(string $name, array $payload): object
+    public function hydrate(string $name, array $payload, callable|string $subscriber): object
     {
         return match ($name) {
             'order.placed' => new OrderPlaced(
