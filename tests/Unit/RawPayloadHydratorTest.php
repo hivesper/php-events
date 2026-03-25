@@ -16,7 +16,7 @@ class RawPayloadHydratorTest extends TestCase
 
     public function test_maps_payload_keys_as_properties(): void
     {
-        $result = $this->hydrator->hydrate('order.placed', ['order_id' => 42, 'total' => 9.99]);
+        $result = $this->hydrator->hydrate('order.placed', ['order_id' => 42, 'total' => 9.99], 'SomeHandler');
 
         self::assertSame(42, $result->order_id);
         self::assertSame(9.99, $result->total);
@@ -24,7 +24,7 @@ class RawPayloadHydratorTest extends TestCase
 
     public function test_empty_payload_returns_empty_object(): void
     {
-        $result = $this->hydrator->hydrate('order.placed', []);
+        $result = $this->hydrator->hydrate('order.placed', [], 'SomeHandler');
 
         self::assertSame([], (array) $result);
     }
@@ -33,8 +33,18 @@ class RawPayloadHydratorTest extends TestCase
     {
         $payload = ['foo' => 'bar'];
 
-        $a = $this->hydrator->hydrate('event.one', $payload);
-        $b = $this->hydrator->hydrate('event.two', $payload);
+        $a = $this->hydrator->hydrate('event.one', $payload, 'SomeHandler');
+        $b = $this->hydrator->hydrate('event.two', $payload, 'SomeHandler');
+
+        self::assertEquals($a, $b);
+    }
+
+    public function test_subscriber_does_not_affect_output(): void
+    {
+        $payload = ['foo' => 'bar'];
+
+        $a = $this->hydrator->hydrate('event.one', $payload, 'HandlerA');
+        $b = $this->hydrator->hydrate('event.one', $payload, 'HandlerB');
 
         self::assertEquals($a, $b);
     }
