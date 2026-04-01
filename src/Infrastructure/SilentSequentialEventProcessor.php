@@ -1,13 +1,13 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use Override;
 use Psr\Log\LoggerInterface;
-use Tcds\Io\Ray\EventHydrator;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\HandlerResolver;
-use Tcds\Io\Ray\RayEvent;
+use Vesper\Tool\Event\EventHydrator;
+use Vesper\Tool\Event\EventSubscriberMap;
+use Vesper\Tool\Event\HandlerResolver;
+use Vesper\Tool\Event\RawEvent;
 use Throwable;
 
 readonly class SilentSequentialEventProcessor extends SequentialEventProcessor
@@ -25,7 +25,7 @@ readonly class SilentSequentialEventProcessor extends SequentialEventProcessor
     }
 
     #[Override]
-    protected function dispatch(RayEvent $event, callable|string $subscriber): void
+    protected function dispatch(RawEvent $event, callable|string $subscriber): void
     {
         try {
             parent::dispatch($event, $subscriber);

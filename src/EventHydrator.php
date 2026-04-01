@@ -1,6 +1,6 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 interface EventHydrator
 {
@@ -12,7 +12,7 @@ interface EventHydrator
      * subscriber itself so the hydrator can resolve the correct type per
      * listener.
      *
-     * Listeners never see RayEvent or raw arrays.
+     * Listeners never see RawEvent or raw arrays.
      *
      * @param array<string, mixed> $payload
      */

@@ -1,12 +1,12 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use Override;
 use ReflectionClass;
 use Tcds\Io\Jackson\ArrayObjectMapper;
-use Tcds\Io\Ray\EventSerializer;
-use Tcds\Io\Ray\SerializedEvent;
+use Vesper\Tool\Event\EventSerializer;
+use Vesper\Tool\Event\SerializedEvent;
 
 readonly class JacksonSerializer implements EventSerializer
 {

@@ -1,6 +1,6 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure\Schema;
+namespace Vesper\Tool\Event\Infrastructure\Schema;
 
 use PDO;
 use PDOException;

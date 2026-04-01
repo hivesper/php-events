@@ -1,6 +1,6 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
 use JsonException;
@@ -8,11 +8,11 @@ use Override;
 use PDO;
 use PDOException;
 use RuntimeException;
-use Tcds\Io\Ray\EventStore;
-use Tcds\Io\Ray\Infrastructure\Schema\MysqlEventStoreSchema;
-use Tcds\Io\Ray\Infrastructure\Schema\SqliteEventStoreSchema;
-use Tcds\Io\Ray\RayEvent;
-use Tcds\Io\Ray\RayEventStatus;
+use Vesper\Tool\Event\EventStore;
+use Vesper\Tool\Event\Infrastructure\Schema\MysqlEventStoreSchema;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
+use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\RawEventStatus;
 
 readonly class SqlEventStore implements EventStore
 {
@@ -28,7 +28,7 @@ readonly class SqlEventStore implements EventStore
      * @throws PDOException
      */
     #[Override]
-    public function add(RayEvent $event): void
+    public function add(RawEvent $event): void
     {
         $stmt = $this->connection->prepare(
             <<<SQL
@@ -54,7 +54,7 @@ readonly class SqlEventStore implements EventStore
      * @throws PDOException
      */
     #[Override]
-    public function next(): ?RayEvent
+    public function next(): ?RawEvent
     {
         $lockClause = $this->lockingClause();
 
@@ -87,10 +87,10 @@ readonly class SqlEventStore implements EventStore
         /** @var array<string, mixed> $payload */
         $payload = json_decode($row['payload'], true, flags: JSON_THROW_ON_ERROR);
 
-        return RayEvent::retrieve(
+        return RawEvent::retrieve(
             id: $row['id'],
             name: $row['name'],
-            status: RayEventStatus::from($row['status']),
+            status: RawEventStatus::from($row['status']),
             payload: $payload,
             createdAt: new CarbonImmutable($row['created_at']),
             publishAt: new CarbonImmutable($row['publish_at']),

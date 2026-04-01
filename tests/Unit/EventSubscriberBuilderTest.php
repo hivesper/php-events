@@ -1,11 +1,11 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\EventSubscriberBuilder;
-use Test\Tcds\Io\Ray\_Fixtures\ListenerA;
-use Test\Tcds\Io\Ray\_Fixtures\ListenerB;
+use Vesper\Tool\Event\EventSubscriberBuilder;
+use Test\Vesper\Tool\Event\_Fixtures\ListenerA;
+use Test\Vesper\Tool\Event\_Fixtures\ListenerB;
 
 class EventSubscriberBuilderTest extends TestCase
 {

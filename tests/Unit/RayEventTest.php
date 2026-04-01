@@ -1,11 +1,11 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\RayEvent;
-use Tcds\Io\Ray\RayEventStatus;
+use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\RawEventStatus;
 
 class RayEventTest extends TestCase
 {
@@ -13,14 +13,14 @@ class RayEventTest extends TestCase
 
     public function test_create_returns_a_ray_event(): void
     {
-        $event = RayEvent::create('order.placed', [], CarbonImmutable::now());
+        $event = RawEvent::create('order.placed', [], CarbonImmutable::now());
 
-        self::assertInstanceOf(RayEvent::class, $event);
+        self::assertInstanceOf(RawEvent::class, $event);
     }
 
     public function test_create_sets_name(): void
     {
-        $event = RayEvent::create('order.placed', [], CarbonImmutable::now());
+        $event = RawEvent::create('order.placed', [], CarbonImmutable::now());
 
         self::assertSame('order.placed', $event->name);
     }
@@ -28,37 +28,37 @@ class RayEventTest extends TestCase
     public function test_create_sets_payload(): void
     {
         $payload = ['order_id' => 42, 'total' => 99.99];
-        $event = RayEvent::create('order.placed', $payload, CarbonImmutable::now());
+        $event = RawEvent::create('order.placed', $payload, CarbonImmutable::now());
 
         self::assertSame($payload, $event->payload);
     }
 
     public function test_create_defaults_status_to_pending(): void
     {
-        $event = RayEvent::create('order.placed', [], CarbonImmutable::now());
+        $event = RawEvent::create('order.placed', [], CarbonImmutable::now());
 
-        self::assertSame(RayEventStatus::pending, $event->status);
+        self::assertSame(RawEventStatus::pending, $event->status);
     }
 
     public function test_create_sets_publish_at(): void
     {
         $publishAt = CarbonImmutable::parse('2030-06-15 12:00:00');
-        $event = RayEvent::create('order.placed', [], $publishAt);
+        $event = RawEvent::create('order.placed', [], $publishAt);
 
         self::assertSame($publishAt->toIso8601String(), $event->publishAt->toIso8601String());
     }
 
     public function test_create_generates_non_empty_id(): void
     {
-        $event = RayEvent::create('order.placed', [], CarbonImmutable::now());
+        $event = RawEvent::create('order.placed', [], CarbonImmutable::now());
 
         self::assertNotEmpty($event->id);
     }
 
     public function test_create_generates_unique_ids(): void
     {
-        $a = RayEvent::create('order.placed', [], CarbonImmutable::now());
-        $b = RayEvent::create('order.placed', [], CarbonImmutable::now());
+        $a = RawEvent::create('order.placed', [], CarbonImmutable::now());
+        $b = RawEvent::create('order.placed', [], CarbonImmutable::now());
 
         self::assertNotSame($a->id, $b->id);
     }
@@ -81,9 +81,9 @@ class RayEventTest extends TestCase
 
     public function test_retrieve_preserves_status(): void
     {
-        $event = $this->makeRetrievedEvent(status: RayEventStatus::processed);
+        $event = $this->makeRetrievedEvent(status: RawEventStatus::processed);
 
-        self::assertSame(RayEventStatus::processed, $event->status);
+        self::assertSame(RawEventStatus::processed, $event->status);
     }
 
     public function test_retrieve_preserves_payload(): void
@@ -115,12 +115,12 @@ class RayEventTest extends TestCase
     private function makeRetrievedEvent(
         string $id = 'test-id',
         string $name = 'order.placed',
-        RayEventStatus $status = RayEventStatus::pending,
+        RawEventStatus $status = RawEventStatus::pending,
         array $payload = [],
         ?CarbonImmutable $createdAt = null,
         ?CarbonImmutable $publishAt = null,
-    ): RayEvent {
-        return RayEvent::retrieve(
+    ): RawEvent {
+        return RawEvent::retrieve(
             id: $id,
             name: $name,
             status: $status,

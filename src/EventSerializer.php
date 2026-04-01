@@ -1,6 +1,6 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 interface EventSerializer
 {
@@ -9,7 +9,7 @@ interface EventSerializer
      *
      * Implement this in the consuming application to map typed domain event
      * objects to the name + payload form stored in the outbox. The publisher
-     * calls this before storing, so RayEvent never appears in the application
+     * calls this before storing, so RawEvent never appears in the application
      * layer.
      */
     public function serialize(object $event): SerializedEvent;

@@ -1,9 +1,9 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 use Carbon\CarbonImmutable;
-use Tcds\Io\Ray\Infrastructure\JacksonSerializer;
+use Vesper\Tool\Event\Infrastructure\JacksonSerializer;
 
 readonly class EventPublisher
 {
@@ -17,14 +17,14 @@ readonly class EventPublisher
     {
         $serialized = $this->serializer->serialize($event);
 
-        $rayEvent = RayEvent::create(
+        $raw = RawEvent::create(
             name: $serialized->name,
             payload: $serialized->payload,
             publishAt: $publishAt,
         );
 
-        $this->store->add($rayEvent);
+        $this->store->add($raw);
 
-        return $rayEvent->id;
+        return $raw->id;
     }
 }

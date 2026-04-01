@@ -1,9 +1,9 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use RuntimeException;
-use Tcds\Io\Ray\HandlerResolver;
+use Vesper\Tool\Event\HandlerResolver;
 
 class DefaultHandlerResolver implements HandlerResolver
 {

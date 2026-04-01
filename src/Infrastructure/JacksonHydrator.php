@@ -1,13 +1,13 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use InvalidArgumentException;
 use Override;
 use ReflectionFunction;
 use ReflectionNamedType;
 use Tcds\Io\Jackson\ArrayObjectMapper;
-use Tcds\Io\Ray\EventHydrator;
+use Vesper\Tool\Event\EventHydrator;
 
 readonly class JacksonHydrator implements EventHydrator
 {

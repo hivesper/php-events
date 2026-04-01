@@ -1,10 +1,10 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 interface EventStore
 {
-    public function add(RayEvent $event): void;
+    public function add(RawEvent $event): void;
 
-    public function next(): ?RayEvent;
+    public function next(): ?RawEvent;
 }

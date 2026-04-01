@@ -1,5 +1,5 @@
 {
-  "name": "tcds-io/php-ray",
+  "name": "hivesper/php-events",
   "description": "A lightweight, framework-agnostic event-driven library for PHP built around the transactional outbox pattern.",
   "type": "library",
   "license": "MIT",
@@ -21,7 +21,7 @@
   },
   "autoload": {
     "psr-4": {
-      "Tcds\\Io\\Ray\\": "src/"
+      "Vesper\\Tool\\Event\\": "src/"
     },
     "files": [
       "fn/functions.php"
@@ -29,7 +29,7 @@
   },
   "autoload-dev": {
     "psr-4": {
-      "Test\\Tcds\\Io\\Ray\\": "tests/"
+      "Test\\Vesper\\Tool\\Event\\": "tests/"
     }
   },
   "scripts": {

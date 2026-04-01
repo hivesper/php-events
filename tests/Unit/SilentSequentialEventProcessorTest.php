@@ -1,16 +1,16 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
-use Tcds\Io\Ray\EventHydrator;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
-use Tcds\Io\Ray\Infrastructure\SilentSequentialEventProcessor;
-use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
-use Test\Tcds\Io\Ray\_Fixtures\ThrowingListener;
+use Vesper\Tool\Event\EventHydrator;
+use Vesper\Tool\Event\EventSubscriberMap;
+use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
+use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
+use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
+use Test\Vesper\Tool\Event\_Fixtures\ThrowingListener;
 
 class SilentSequentialEventProcessorTest extends TestCase
 {

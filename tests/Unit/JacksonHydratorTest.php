@@ -1,11 +1,11 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\Infrastructure\JacksonHydrator;
-use Test\Tcds\Io\Ray\_Fixtures\OrderPlacedStub;
+use Vesper\Tool\Event\Infrastructure\JacksonHydrator;
+use Test\Vesper\Tool\Event\_Fixtures\OrderPlacedStub;
 
 class JacksonHydratorTest extends TestCase
 {

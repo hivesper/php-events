@@ -1,6 +1,6 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\_Fixtures;
+namespace Test\Vesper\Tool\Event\_Fixtures;
 
 readonly class EmptyEventStub
 {

@@ -1,22 +1,22 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use Override;
-use Tcds\Io\Ray\EventStore;
-use Tcds\Io\Ray\RayEvent;
+use Vesper\Tool\Event\EventStore;
+use Vesper\Tool\Event\RawEvent;
 
 class InMemoryEventStore implements EventStore
 {
-    /** @var list<RayEvent> */
+    /** @var list<RawEvent> */
     private array $queue = [];
 
-    #[Override] public function add(RayEvent $event): void
+    #[Override] public function add(RawEvent $event): void
     {
         $this->queue[] = $event;
     }
 
-    #[Override] public function next(): ?RayEvent
+    #[Override] public function next(): ?RawEvent
     {
         return array_shift($this->queue) ?? null;
     }

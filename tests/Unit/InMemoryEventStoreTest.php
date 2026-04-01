@@ -1,10 +1,10 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
-use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
+use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
+use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 
 class InMemoryEventStoreTest extends TestCase
 {

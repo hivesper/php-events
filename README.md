@@ -1,6 +1,4 @@
-# ☀️ php-ray
-
-> *Hit the road jack, and don't you come back… unless it's via Ray*
+# ☀️ php-events
 
 A lightweight, framework-agnostic event system for PHP 8.4+ built around the **transactional outbox pattern**.
 
@@ -19,14 +17,14 @@ Events are first written to a durable store (in-memory or SQL), then dispatched 
 - **Scheduled delivery** — set `publishAt` in the future; the processor only picks up events whose time has come
 - **Worker-safe** — MySQL store uses `FOR UPDATE SKIP LOCKED` to allow multiple workers without double-processing
 - **Auto schema** — `SqlEventStore` creates its own tables on first boot, no migrations needed
-- **Clean architecture boundaries** — `EventSerializer` and `EventHydrator` keep `RayEvent` out of your application layer
+- **Clean architecture boundaries** — `EventSerializer` and `EventHydrator` keep `RawEvent` out of your application layer
 
 ---
 
 ## Installation
 
 ```bash
-composer require tcds-io/php-ray
+composer require hivesper/php-events
 ```
 
 > Requires PHP ≥ 8.4, `ext-json`, `ext-pdo`.
@@ -49,8 +47,8 @@ composer require tcds-io/php-ray
 
 | Class | Role |
 |---|---|
-| `RayEvent` | Immutable value object representing a single stored event |
-| `EventStore` | Interface — a durable FIFO queue of `RayEvent` |
+| `RawEvent` | Immutable value object representing a single stored event |
+| `EventStore` | Interface — a durable FIFO queue of `RawEvent` |
 | `EventSerializer` | Interface — converts a domain event object into a `SerializedEvent` |
 | `EventHydrator` | Interface — reconstructs a domain event object from a stored name + payload |
 | `SerializedEvent` | Value object holding the event `name` and `payload` array |
@@ -66,11 +64,11 @@ composer require tcds-io/php-ray
 ## Quick start
 
 ```php
-use Tcds\Io\Ray\EventPublisher;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
-use Tcds\Io\Ray\Infrastructure\JacksonSerializer;
-use Tcds\Io\Ray\Infrastructure\SequentialEventProcessor;
+use Tcds\Io\Raw\EventPublisher;
+use Tcds\Io\Raw\EventSubscriberMap;
+use Tcds\Io\Raw\Infrastructure\InMemoryEventStore;
+use Tcds\Io\Raw\Infrastructure\JacksonSerializer;
+use Tcds\Io\Raw\Infrastructure\SequentialEventProcessor;
 
 // 1. Define a typed domain event
 final readonly class OrderPlaced
@@ -110,15 +108,15 @@ $processor->process($store);
 
 ---
 
-## RayEvent
+## RawEvent
 
-`RayEvent` is an internal value object used by the store layer. Application code does not construct or receive `RayEvent` directly — use `EventSerializer` when publishing and `EventHydrator` when processing (see below).
+`RawEvent` is an internal value object used by the store layer. Application code does not construct or receive `RawEvent` directly — use `EventSerializer` when publishing and `EventHydrator` when processing (see below).
 
 Events are created via two static factories:
 
 ```php
 // Create a brand-new event (generates a UUID v7 id, sets status → pending)
-$event = RayEvent::create(
+$event = RawEvent::create(
     name: 'payment.received',
     payload: ['amount' => 150, 'currency' => 'USD'],
     publishAt: CarbonImmutable::now(),
@@ -126,16 +124,16 @@ $event = RayEvent::create(
 
 echo $event->id;        // uuid7 string
 echo $event->name;      // "payment.received"
-echo $event->status;    // RayEventStatus::pending
+echo $event->status;    // RawEventStatus::pending
 print_r($event->payload); // ['amount' => 150, 'currency' => 'USD']
 ```
 
 ```php
 // Reconstruct an event from persisted data (used internally by SqlEventStore)
-$event = RayEvent::retrieve(
+$event = RawEvent::retrieve(
     id: $row['id'],
     name: $row['name'],
-    status: RayEventStatus::from($row['status']),
+    status: RawEventStatus::from($row['status']),
     payload: json_decode($row['payload'], true),
     createdAt: new CarbonImmutable($row['created_at']),
     publishAt: new CarbonImmutable($row['publish_at']),
@@ -157,7 +155,7 @@ $publisher->publish(
 
 ## EventSerializer
 
-`EventSerializer` converts a domain event object into a `SerializedEvent` (a `name` string and a `payload` array) before it is stored. `EventPublisher` calls it automatically — application code never touches `RayEvent` directly.
+`EventSerializer` converts a domain event object into a `SerializedEvent` (a `name` string and a `payload` array) before it is stored. `EventPublisher` calls it automatically — application code never touches `RawEvent` directly.
 
 ```php
 interface EventSerializer
@@ -171,7 +169,7 @@ interface EventSerializer
 Derives the event name from the short class name (PascalCase) and uses Jackson's `ArrayObjectMapper` to serialize the object to an array payload. Handles constructor-promoted properties, nested objects, and collections automatically:
 
 ```php
-use Tcds\Io\Ray\Infrastructure\JacksonSerializer;
+use Tcds\Io\Raw\Infrastructure\JacksonSerializer;
 
 $publisher = new EventPublisher($store, new JacksonSerializer());
 
@@ -186,8 +184,8 @@ $publisher = new EventPublisher($store, new JacksonSerializer());
 Implement `EventSerializer` for explicit name mapping or complex payload graphs:
 
 ```php
-use Tcds\Io\Ray\EventSerializer;
-use Tcds\Io\Ray\SerializedEvent;
+use Tcds\Io\Raw\EventSerializer;
+use Tcds\Io\Raw\SerializedEvent;
 
 final class AppEventSerializer implements EventSerializer
 {
@@ -248,7 +246,7 @@ $subscribers->subscribe('order.placed', function (object $event): void {
 Implement `EventHydrator` to return fully typed domain event objects to your subscribers:
 
 ```php
-use Tcds\Io\Ray\EventHydrator;
+use Tcds\Io\Raw\EventHydrator;
 
 final class AppEventHydrator implements EventHydrator
 {
@@ -293,7 +291,7 @@ $store = new InMemoryEventStore();
 Production-ready persistent store. Requires a PDO connection to **MySQL** or **SQLite**. Creates the `event_outbox` table automatically on first boot.
 
 ```php
-use Tcds\Io\Ray\Infrastructure\SqlEventStore;
+use Tcds\Io\Raw\Infrastructure\SqlEventStore;
 
 $pdo   = new PDO('mysql:host=localhost;dbname=myapp', 'user', 'pass');
 $store = new SqlEventStore($pdo); // schema created here if not present
@@ -351,7 +349,7 @@ Multiple subscribers for the same type are called **in registration order**.
 A fluent builder that produces a ready-to-use `EventSubscriberMap`. Useful for wiring up callables in one place before handing the result to `SequentialEventProcessor`:
 
 ```php
-use Tcds\Io\Ray\EventSubscriberBuilder;
+use Tcds\Io\Raw\EventSubscriberBuilder;
 
 $subscribers = EventSubscriberBuilder::create()
     ->eventType('order.placed',     [OrderPlacedHandler::class, AuditLogger::class])
@@ -379,8 +377,8 @@ $processor->process($store);
 Implement `EventProcessor` to build your own — e.g. a parallel or batched processor:
 
 ```php
-use Tcds\Io\Ray\EventProcessor;
-use Tcds\Io\Ray\EventStore;
+use Tcds\Io\Raw\EventProcessor;
+use Tcds\Io\Raw\EventStore;
 
 class MyProcessor implements EventProcessor
 {
@@ -400,7 +398,7 @@ class MyProcessor implements EventProcessor
 In local development and CI, letting a failing listener throw immediately is exactly what you want — fast, noisy feedback. In production the calculus is different: a single listener failure should not prevent the remaining listeners for that event from running, nor should it block every subsequent event in the queue. `SilentSequentialEventProcessor` wraps each listener dispatch in a try-catch, logs the failure, and carries on.
 
 ```php
-use Tcds\Io\Ray\Infrastructure\SilentSequentialEventProcessor;
+use Tcds\Io\Raw\Infrastructure\SilentSequentialEventProcessor;
 
 $processor = new SilentSequentialEventProcessor($subscribers, $logger);
 $processor->process($store);
@@ -420,14 +418,14 @@ Failed to dispatch event to listener.
 
 ### PSR-3 logger
 
-`SilentSequentialEventProcessor` accepts any [PSR-3](https://www.php-fig.org/psr/psr-3/) `LoggerInterface`. php-ray ships no concrete logger — supply whichever one your application already uses:
+`SilentSequentialEventProcessor` accepts any [PSR-3](https://www.php-fig.org/psr/psr-3/) `LoggerInterface`. vesper php-events ships no concrete logger — supply whichever one your application already uses:
 
 ```php
 // Monolog
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 
-$logger = new Logger('ray');
+$logger = new Logger('events');
 $logger->pushHandler(new StreamHandler('php://stderr'));
 
 $processor = new SilentSequentialEventProcessor($subscribers, $logger);
@@ -449,12 +447,12 @@ $processor = new SilentSequentialEventProcessor($subscribers, app('log'));
 
 ---
 
-## RayEventStatus
+## RawEventStatus
 
 ```php
-RayEventStatus::pending    // event is waiting to be processed
-RayEventStatus::processed  // event was successfully dequeued
-RayEventStatus::failed     // reserved for failed-delivery tracking
+RawEventStatus::pending    // event is waiting to be processed
+RawEventStatus::processed  // event was successfully dequeued
+RawEventStatus::failed     // reserved for failed-delivery tracking
 ```
 
 ---

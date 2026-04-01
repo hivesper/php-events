@@ -1,12 +1,12 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Feature;
+namespace Test\Vesper\Tool\Event\Feature;
 
 use Carbon\CarbonImmutable;
 use PDO;
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\Infrastructure\SqlEventStore;
-use Tcds\Io\Ray\RayEvent;
+use Vesper\Tool\Event\Infrastructure\SqlEventStore;
+use Vesper\Tool\Event\RawEvent;
 
 class SqlEventStoreTest extends TestCase
 {
@@ -158,8 +158,8 @@ class SqlEventStoreTest extends TestCase
         string $name,
         array $payload = [],
         ?CarbonImmutable $publishAt = null,
-    ): RayEvent {
-        return RayEvent::create(
+    ): RawEvent {
+        return RawEvent::create(
             name: $name,
             payload: $payload,
             publishAt: $publishAt ?? CarbonImmutable::now()->subSecond(),

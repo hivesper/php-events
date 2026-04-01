@@ -1,11 +1,11 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 use Carbon\CarbonImmutable;
 use Ramsey\Uuid\Uuid;
 
-readonly class RayEvent
+readonly class RawEvent
 {
     /**
      * @param array<string, mixed> $payload
@@ -13,7 +13,7 @@ readonly class RayEvent
     private function __construct(
         public string $id,
         public string $name,
-        public RayEventStatus $status,
+        public RawEventStatus $status,
         public array $payload,
         public CarbonImmutable $createdAt,
         public CarbonImmutable $publishAt,
@@ -31,7 +31,7 @@ readonly class RayEvent
         return new self(
             id: Uuid::uuid7(),
             name: $name,
-            status: RayEventStatus::pending,
+            status: RawEventStatus::pending,
             payload: $payload,
             createdAt: CarbonImmutable::now(),
             publishAt: $publishAt ?? CarbonImmutable::now(),
@@ -44,7 +44,7 @@ readonly class RayEvent
     public static function retrieve(
         string $id,
         string $name,
-        RayEventStatus $status,
+        RawEventStatus $status,
         array $payload,
         CarbonImmutable $createdAt,
         CarbonImmutable $publishAt,

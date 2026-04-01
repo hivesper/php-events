@@ -1,13 +1,13 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\RayEvent;
-use Test\Tcds\Io\Ray\_Fixtures\ListenerA;
-use Test\Tcds\Io\Ray\_Fixtures\ListenerB;
-use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
+use Vesper\Tool\Event\EventSubscriberMap;
+use Vesper\Tool\Event\RawEvent;
+use Test\Vesper\Tool\Event\_Fixtures\ListenerA;
+use Test\Vesper\Tool\Event\_Fixtures\ListenerB;
+use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 
 class EventSubscriberMapTest extends TestCase
 {
@@ -83,7 +83,7 @@ class EventSubscriberMapTest extends TestCase
     public function test_subscribe_passes_event_to_handler(): void
     {
         $received = null;
-        $this->subscribers->subscribe('order.placed', function (RayEvent $e) use (&$received) {
+        $this->subscribers->subscribe('order.placed', function (RawEvent $e) use (&$received) {
             $received = $e;
         });
 

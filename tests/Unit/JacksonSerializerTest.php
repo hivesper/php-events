@@ -1,12 +1,12 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\Infrastructure\JacksonSerializer;
-use Tcds\Io\Ray\SerializedEvent;
-use Test\Tcds\Io\Ray\_Fixtures\EmptyEventStub;
-use Test\Tcds\Io\Ray\_Fixtures\OrderPlacedStub;
+use Vesper\Tool\Event\Infrastructure\JacksonSerializer;
+use Vesper\Tool\Event\SerializedEvent;
+use Test\Vesper\Tool\Event\_Fixtures\EmptyEventStub;
+use Test\Vesper\Tool\Event\_Fixtures\OrderPlacedStub;
 
 class JacksonSerializerTest extends TestCase
 {

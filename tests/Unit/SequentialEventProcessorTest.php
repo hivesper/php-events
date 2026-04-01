@@ -1,15 +1,15 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Tcds\Io\Ray\EventHydrator;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\HandlerResolver;
-use Tcds\Io\Ray\Infrastructure\InMemoryEventStore;
-use Tcds\Io\Ray\Infrastructure\SequentialEventProcessor;
-use Test\Tcds\Io\Ray\_Fixtures\TestEventFactory;
-use Test\Tcds\Io\Ray\_Fixtures\TrackingListener;
+use Vesper\Tool\Event\EventHydrator;
+use Vesper\Tool\Event\EventSubscriberMap;
+use Vesper\Tool\Event\HandlerResolver;
+use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
+use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
+use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
+use Test\Vesper\Tool\Event\_Fixtures\TrackingListener;
 
 class SequentialEventProcessorTest extends TestCase
 {

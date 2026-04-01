@@ -1,8 +1,8 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
-enum RayEventStatus: string
+enum RawEventStatus: string
 {
     case pending = 'pending';
     case processed = 'processed';

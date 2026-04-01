@@ -1,14 +1,14 @@
 <?php
 
-namespace Tcds\Io\Ray\Infrastructure;
+namespace Vesper\Tool\Event\Infrastructure;
 
 use Override;
-use Tcds\Io\Ray\EventHydrator;
-use Tcds\Io\Ray\EventProcessor;
-use Tcds\Io\Ray\EventStore;
-use Tcds\Io\Ray\EventSubscriberMap;
-use Tcds\Io\Ray\HandlerResolver;
-use Tcds\Io\Ray\RayEvent;
+use Vesper\Tool\Event\EventHydrator;
+use Vesper\Tool\Event\EventProcessor;
+use Vesper\Tool\Event\EventStore;
+use Vesper\Tool\Event\EventSubscriberMap;
+use Vesper\Tool\Event\HandlerResolver;
+use Vesper\Tool\Event\RawEvent;
 
 readonly class SequentialEventProcessor implements EventProcessor
 {
@@ -31,7 +31,7 @@ readonly class SequentialEventProcessor implements EventProcessor
         }
     }
 
-    protected function dispatch(RayEvent $event, callable|string $subscriber): void
+    protected function dispatch(RawEvent $event, callable|string $subscriber): void
     {
         $callable = $this->resolver->resolve($subscriber);
 

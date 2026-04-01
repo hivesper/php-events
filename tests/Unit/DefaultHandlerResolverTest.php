@@ -1,12 +1,12 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use stdClass;
-use Tcds\Io\Ray\Infrastructure\DefaultHandlerResolver;
-use Test\Tcds\Io\Ray\_Fixtures\TrackingListener;
+use Vesper\Tool\Event\Infrastructure\DefaultHandlerResolver;
+use Test\Vesper\Tool\Event\_Fixtures\TrackingListener;
 
 class DefaultHandlerResolverTest extends TestCase
 {

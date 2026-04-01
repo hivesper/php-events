@@ -1,14 +1,14 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\Unit;
+namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
 use stdClass;
-use Tcds\Io\Ray\EventPublisher;
-use Tcds\Io\Ray\EventSerializer;
-use Tcds\Io\Ray\EventStore;
-use Tcds\Io\Ray\RayEvent;
-use Tcds\Io\Ray\SerializedEvent;
+use Vesper\Tool\Event\EventPublisher;
+use Vesper\Tool\Event\EventSerializer;
+use Vesper\Tool\Event\EventStore;
+use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\SerializedEvent;
 
 class EventPublisherTest extends TestCase
 {
@@ -22,7 +22,7 @@ class EventPublisherTest extends TestCase
         $store = $this->createMock(EventStore::class);
         $store->expects(self::once())->method('add')->with(
             $this->callback(
-                fn(RayEvent $e) => $e->name === 'order.placed' && $e->payload === ['order_id' => 1],
+                fn(RawEvent $e) => $e->name === 'order.placed' && $e->payload === ['order_id' => 1],
             ),
         );
 

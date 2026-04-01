@@ -1,6 +1,6 @@
 <?php
 
-namespace Tcds\Io\Ray;
+namespace Vesper\Tool\Event;
 
 readonly class SerializedEvent
 {
