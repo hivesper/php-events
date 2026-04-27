@@ -5,12 +5,14 @@ namespace Test\Vesper\Tool\Event\Unit;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
+use Test\Vesper\Tool\Event\_Fixtures\IgnorableExceptionStub;
+use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
+use Test\Vesper\Tool\Event\_Fixtures\ThrowingListener;
 use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
 use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
-use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
-use Test\Vesper\Tool\Event\_Fixtures\ThrowingListener;
+use Vesper\Tool\Event\RedeliveryTracker;
 
 class SilentSequentialEventProcessorTest extends TestCase
 {
@@ -170,5 +172,78 @@ class SilentSequentialEventProcessorTest extends TestCase
         $this->processor->process($this->store);
 
         self::assertSame([2], $received);
+    }
+
+    // ── retry / redelivery integration ─────────────────────────────────────────
+
+    public function test_logs_and_marks_failed_permanently_when_retries_are_exhausted(): void
+    {
+        $event = TestEventFactory::retrieveOrderPlaced();
+        $this->store->add($event);
+
+        $exception = new RuntimeException('always');
+        $this->subscribers->subscribe('order.placed', function () use ($exception) {
+            throw $exception;
+        });
+
+        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker->expects($this->once())
+            ->method('markFailedPermanently')
+            ->with($event->id, 'Closure', $exception);
+        $tracker->method('nextDue')->willReturn(null);
+
+        $this->logger->expects($this->once())
+            ->method('error')
+            ->with(
+                'Failed to dispatch event to listener.',
+                [
+                    'event'     => 'order.placed',
+                    'event_id'  => $event->id,
+                    'listener'  => 'Closure',
+                    'exception' => $exception,
+                ],
+            );
+
+        $hydrator = $this->createStub(EventHydrator::class);
+        $hydrator->method('hydrate')->willReturnCallback(fn(string $name, array $payload) => (object) $payload);
+
+        $processor = new SilentSequentialEventProcessor(
+            subscribers: $this->subscribers,
+            logger: $this->logger,
+            hydrator: $hydrator,
+            redeliveryTracker: $tracker,
+        );
+
+        $processor->process($this->store);
+    }
+
+    public function test_ignored_exception_is_suppressed_with_no_log_or_tracker_call(): void
+    {
+        $this->store->add(TestEventFactory::retrieveOrderPlaced());
+
+        $this->subscribers->subscribe('order.placed', function () {
+            throw new IgnorableExceptionStub('expected domain failure');
+        });
+
+        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker->expects($this->never())->method('schedule');
+        $tracker->expects($this->never())->method('markFailedPermanently');
+        $tracker->expects($this->never())->method('markSucceeded');
+        $tracker->method('nextDue')->willReturn(null);
+
+        $this->logger->expects($this->never())->method('error');
+
+        $hydrator = $this->createStub(EventHydrator::class);
+        $hydrator->method('hydrate')->willReturnCallback(fn(string $name, array $payload) => (object) $payload);
+
+        $processor = new SilentSequentialEventProcessor(
+            subscribers: $this->subscribers,
+            logger: $this->logger,
+            hydrator: $hydrator,
+            redeliveryTracker: $tracker,
+            ignoredExceptions: [IgnorableExceptionStub::class],
+        );
+
+        $processor->process($this->store);
     }
 }

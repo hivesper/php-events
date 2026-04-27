@@ -20,4 +20,9 @@ class InMemoryEventStore implements EventStore
     {
         return array_shift($this->queue) ?? null;
     }
+
+    #[Override] public function markProcessed(string $eventId): void
+    {
+        // No-op: the in-memory queue discards events on next(); there is no persisted status to flip.
+    }
 }
