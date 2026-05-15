@@ -704,35 +704,22 @@ RawEventStatus::processed   // event was dispatched to every listener (per-liste
 
 ---
 
-## Future work
+## Operational queries
 
-This section captures known gaps and what we'd want to add. The redelivery layer is the headline
-feature shipped now; what follows is intentionally deferred so we can let real usage shape it.
+Useful queries against the existing tables:
 
-### Force-complete recovery for processing rows
+- Listeners with permanent failures — `SELECT * FROM event_outbox_redelivery WHERE status = 'failed'`.
+- Events recovered by the stuck-events sweeper — `SELECT * FROM event_outbox_status WHERE error_message = 'Recovered from stuck processing state'`.
+- Dispatch latency — average time between consecutive rows in `event_outbox_status` for the same `event_id`.
 
-`recoverStuckEvents()` re-claims rows (`processing → pending`) for re-dispatch. The other
+`recoverStuckEvents()` re-claims wedged rows (`processing → pending`) for re-dispatch. The other
 plausible recovery mode — **force-complete** (`processing → processed`) — is intentionally not
 exposed: it's only safe when the dispatch is believed to have finished but the bookkeeping
 commit was lost, and that's a judgement call that belongs in operator tooling rather than a
 library API. If you need it, the operation is two statements: `UPDATE event_outbox SET status =
 'processed' WHERE id = ?` and an audit insert with a recovery marker.
 
-### Operational signals you can build today
-
-These are queryable from the existing tables:
-
-- "Listeners with permanent failures" — `SELECT * FROM event_outbox_redelivery WHERE status = 'failed'`.
-- "Average time-between rows in `event_outbox_status` by status pair" — reveals dispatch latency.
-- "Events recovered by the stuck-events sweeper" — `SELECT * FROM event_outbox_status WHERE error_message = 'Recovered from stuck processing state'`.
-
 See [ROADMAP.md](ROADMAP.md) for known limitations and planned work.
-
-### Reference reading
-
-- [Spring Modulith — Event Publication Registry](https://docs.spring.io/spring-modulith/reference/events.html) — closest reference shape (per-listener rows, status enum including `PROCESSING` / `RESUBMITTED`, completion attempts).
-- [gruelbox/transaction-outbox](https://github.com/gruelbox/transaction-outbox) — alternative model with no `processing` state (uses optimistic-lock `version` column + `nextAttemptTime` lease). Worth understanding for context on why our model needs `processing` and theirs doesn't (their event = single dispatch; ours = multiple listeners).
-- [AWS Prescriptive Guidance: Transactional Outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html) — high-level pattern doc.
 
 ---
 
