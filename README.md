@@ -116,6 +116,36 @@ $processor->process($store);
 
 ---
 
+## Scheduled jobs
+
+A production deployment runs three scheduled jobs against this library. They touch
+mostly-disjoint tables and rows, so they can run in parallel without contending.
+
+| Job | Recommended cadence | What it does |
+|---|---|---|
+| `$processor->process($store)` | Every minute, or on demand after a business write | Drains all currently-pending events from `event_outbox` and dispatches each to its listeners. Loops internally until empty. See [Running your own processor](#running-your-own-processor). |
+| `$processor->processNextRedelivery()` | Every minute, looped per tick to drain a batch | Picks up one due retry from `event_outbox_redelivery` and dispatches it. Loop the call within a single tick if you want to drain multiple. See [Automatic retry & failure tracking](#automatic-retry--failure-tracking). |
+| `$store->recoverStuckEvents(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox` rows wedged in `processing` (worker crash victims) back to `pending`. Threshold should be comfortably longer than your longest healthy dispatch — see [Recovering stuck events](#recovering-stuck-events). |
+
+Only `recoverStuckEvents` is SQL-specific (lives on `SqlEventStore`). The other two
+work against any `EventStore` / `RedeliveryTracker` implementation.
+
+The three jobs do not compete for the same rows:
+
+- `process()` reads `event_outbox` rows in `pending` status; `recoverStuckEvents()` reads
+  rows in `processing` status — disjoint by the status filter.
+- `processNextRedelivery()` reads the redelivery table, not the outbox.
+- The lock from `SELECT ... FOR UPDATE SKIP LOCKED` is held through each job's transaction,
+  so concurrent workers running the same job never claim the same row either.
+
+The one cross-job interaction to think about: if `recoverStuckEvents` flips a row from
+`processing` back to `pending` while a slow worker is still actively dispatching it,
+another worker can pick it up via `process()` and re-fire its listeners. Choose a
+threshold comfortably longer than your longest healthy dispatch, and make sure
+listeners are idempotent (the at-least-once outbox contract requires that anyway).
+
+---
+
 ## RawEvent
 
 `RawEvent` is an internal value object used by the store layer. Application code does not construct or receive `RawEvent` directly — use `EventSerializer` when publishing and `EventHydrator` when processing (see below).
