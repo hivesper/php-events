@@ -2,7 +2,6 @@
 
 namespace Vesper\Tool\Event\Infrastructure;
 
-use Carbon\CarbonImmutable;
 use Closure;
 use Override;
 use RuntimeException;
@@ -21,17 +20,7 @@ class SequentialEventProcessor implements EventProcessor
 {
     /**
      * @param EventSubscriberMap<object>    $subscribers
-     * @param list<class-string<Throwable>> $ignoredExceptions         exceptions thrown by a
-     *                                                                 listener that should be
-     *                                                                 silently swallowed: no
-     *                                                                 retry, no log, no redelivery
-     *                                                                 row
-     * @param int                           $inProcessRetryThresholdMs the policy's next-retry
-     *                                                                 delay is performed in-process
-     *                                                                 (sleep + retry) when ≤ this
-     *                                                                 value; otherwise the failure
-     *                                                                 is persisted for later
-     *                                                                 redelivery
+     * @param list<class-string<Throwable>> $ignoredExceptions
      */
     public function __construct(
         private readonly EventSubscriberMap $subscribers,
@@ -40,7 +29,6 @@ class SequentialEventProcessor implements EventProcessor
         private readonly RetryPolicy $retryPolicy = new NoRetryPolicy(),
         private readonly ?RedeliveryTracker $redeliveryTracker = null,
         private readonly array $ignoredExceptions = [],
-        private readonly int $inProcessRetryThresholdMs = 1000,
     ) {
     }
 
@@ -52,23 +40,37 @@ class SequentialEventProcessor implements EventProcessor
             }
             $store->markProcessed($event->id);
         }
+    }
 
-        if ($this->redeliveryTracker !== null) {
-            while ($due = $this->redeliveryTracker->nextDue()) {
-                $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
-
-                if ($subscriber === null) {
-                    $this->redeliveryTracker->markFailedPermanently(
-                        $due->event->id,
-                        $due->listener,
-                        new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
-                    );
-                    continue;
-                }
-
-                $this->dispatch($due->event, $subscriber, $due->attemptNumber);
-            }
+    /**
+     * Dispatch the next due redelivery, if any. Call this from a separate
+     * scheduled job so persisted retries are picked up independently of
+     * the main outbox worker.
+     */
+    public function processNextRedelivery(): void
+    {
+        if ($this->redeliveryTracker === null) {
+            return;
         }
+
+        $due = $this->redeliveryTracker->nextDue();
+
+        if ($due === null) {
+            return;
+        }
+
+        $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
+
+        if ($subscriber === null) {
+            $this->redeliveryTracker->markFailedPermanently(
+                $due->event->id,
+                $due->listener,
+                new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
+            );
+            return;
+        }
+
+        $this->dispatch($due->event, $subscriber, $due->attemptNumber);
     }
 
     private function findRegisteredSubscriber(string $eventName, string $listenerKey): callable|string|null
@@ -81,57 +83,38 @@ class SequentialEventProcessor implements EventProcessor
         return null;
     }
 
-    /**
-     * @param int $attemptsMade attempts already made before this dispatch call (0 for a fresh
-     *                          event, ≥1 when called from the redelivery drain)
-     */
+    /** @param int $attemptsMade attempts already made before this call (0 for fresh, ≥1 from redelivery) */
     protected function dispatch(RawEvent $event, callable|string $subscriber, int $attemptsMade = 0): void
     {
         $callable = $this->resolver->resolve($subscriber);
         $domainEvent = $this->hydrator->hydrate($event->name, $event->payload, $callable);
         $listener = $this->listenerKey($subscriber);
 
-        while (true) {
-            try {
-                $callable($domainEvent);
-                $this->redeliveryTracker?->markSucceeded($event->id, $listener);
+        try {
+            $callable($domainEvent);
+            $this->redeliveryTracker?->markSucceeded($event->id, $listener);
+        } catch (Throwable $e) {
+            if ($this->isIgnored($e)) {
                 return;
-            } catch (Throwable $e) {
-                if ($this->isIgnored($e)) {
-                    return;
-                }
+            }
 
-                $attemptsMade++;
-                $nextRetryAt = $this->retryPolicy->nextRetryAt($attemptsMade);
+            $attemptsMade++;
+            $nextRetryAt = $this->retryPolicy->nextRetryAt($attemptsMade);
 
-                if ($nextRetryAt === null) {
-                    $this->onPermanentFailure($event, $subscriber, $e);
-                    throw $e;
-                }
-
-                $delayMs = $this->msUntil($nextRetryAt);
-
-                if ($delayMs <= $this->inProcessRetryThresholdMs) {
-                    $this->sleep($delayMs);
-                    continue;
-                }
-
-                if ($this->redeliveryTracker !== null) {
-                    $this->redeliveryTracker->schedule($event, $listener, $attemptsMade, $nextRetryAt, $e);
-                    return;
-                }
-
+            if ($nextRetryAt === null) {
                 $this->onPermanentFailure($event, $subscriber, $e);
                 throw $e;
             }
+
+            if ($this->redeliveryTracker === null) {
+                throw $e;
+            }
+
+            $this->redeliveryTracker->schedule($event, $listener, $attemptsMade, $nextRetryAt, $e);
         }
     }
 
-    /**
-     * Hook called once a listener's failure can no longer be retried (policy exhausted, or no
-     * tracker is configured to persist a long-delay retry). Default: persist the permanent-failure
-     * marker on the redelivery tracker if one is configured. Subclasses can extend (e.g. log).
-     */
+    /** Called when a listener's failure can no longer be retried. Subclasses can extend (e.g. log). */
     protected function onPermanentFailure(RawEvent $event, callable|string $subscriber, Throwable $error): void
     {
         $this->redeliveryTracker?->markFailedPermanently($event->id, $this->listenerKey($subscriber), $error);
@@ -150,14 +133,6 @@ class SequentialEventProcessor implements EventProcessor
         return 'Closure';
     }
 
-    protected function sleep(int $milliseconds): void
-    {
-        if ($milliseconds <= 0) {
-            return;
-        }
-        usleep($milliseconds * 1000);
-    }
-
     private function isIgnored(Throwable $error): bool
     {
         foreach ($this->ignoredExceptions as $class) {
@@ -166,11 +141,5 @@ class SequentialEventProcessor implements EventProcessor
             }
         }
         return false;
-    }
-
-    private function msUntil(CarbonImmutable $when): int
-    {
-        $diffMs = (int) round(CarbonImmutable::now()->diffInMilliseconds($when, absolute: false));
-        return max(0, $diffMs);
     }
 }

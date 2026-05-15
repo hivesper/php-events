@@ -11,11 +11,7 @@ use Vesper\Tool\Event\RedeliveryTracker;
 
 class InMemoryRedeliveryTracker implements RedeliveryTracker
 {
-    public const string STATUS_PENDING = 'pending_retry';
-    public const string STATUS_FAILED = 'failed';
-    public const string STATUS_SUCCEEDED = 'succeeded';
-
-    /** @var array<string, array{event: RawEvent, listener: string, status: string, attempt_number: int, next_retry_at: ?CarbonImmutable, last_error: ?string, created_at: CarbonImmutable, updated_at: CarbonImmutable}> */
+    /** @var array<string, array{event: RawEvent, listener: string, status: RedeliveryStatus, attempt_number: int, next_retry_at: CarbonImmutable, last_error: ?string, created_at: CarbonImmutable, updated_at: CarbonImmutable}> */
     private array $rows = [];
 
     #[Override]
@@ -32,7 +28,7 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
         $this->rows[$key] = [
             'event' => $event,
             'listener' => $listener,
-            'status' => self::STATUS_PENDING,
+            'status' => RedeliveryStatus::PendingRetry,
             'attempt_number' => $attemptNumber,
             'next_retry_at' => $nextRetryAt,
             'last_error' => self::formatError($lastError),
@@ -48,10 +44,10 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
         $candidate = null;
 
         foreach ($this->rows as $row) {
-            if ($row['status'] !== self::STATUS_PENDING) {
+            if ($row['status'] !== RedeliveryStatus::PendingRetry) {
                 continue;
             }
-            if ($row['next_retry_at'] === null || $row['next_retry_at']->greaterThan($now)) {
+            if ($row['next_retry_at']->greaterThan($now)) {
                 continue;
             }
             if ($candidate === null || $row['next_retry_at']->lessThan($candidate['next_retry_at'])) {
@@ -79,8 +75,7 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
             return;
         }
 
-        $this->rows[$key]['status'] = self::STATUS_FAILED;
-        $this->rows[$key]['next_retry_at'] = null;
+        $this->rows[$key]['status'] = RedeliveryStatus::Failed;
         $this->rows[$key]['last_error'] = self::formatError($lastError);
         $this->rows[$key]['updated_at'] = CarbonImmutable::now();
     }
@@ -94,8 +89,7 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
             return;
         }
 
-        $this->rows[$key]['status'] = self::STATUS_SUCCEEDED;
-        $this->rows[$key]['next_retry_at'] = null;
+        $this->rows[$key]['status'] = RedeliveryStatus::Succeeded;
         $this->rows[$key]['updated_at'] = CarbonImmutable::now();
     }
 
@@ -108,7 +102,7 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
             return;
         }
 
-        $this->rows[$key]['status'] = self::STATUS_PENDING;
+        $this->rows[$key]['status'] = RedeliveryStatus::PendingRetry;
         $this->rows[$key]['next_retry_at'] = CarbonImmutable::now();
         $this->rows[$key]['updated_at'] = CarbonImmutable::now();
     }

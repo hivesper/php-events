@@ -11,9 +11,9 @@ interface RetryPolicy
      * further retries should be made.
      *
      * $previousAttempt = 1 means "the first attempt just failed; when should
-     * attempt 2 run?" The processor classifies the returned timestamp as an
-     * in-process retry (sleep then retry) or a persisted retry (insert into
-     * the redelivery table) based on its own threshold.
+     * attempt 2 run?" The processor persists the returned timestamp in the
+     * redelivery table; the cron-driven `processNextRedelivery()` flow picks
+     * it up when it comes due.
      */
     public function nextRetryAt(int $previousAttempt): ?CarbonImmutable;
 }

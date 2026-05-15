@@ -14,7 +14,7 @@ Events are first written to a durable store (in-memory or SQL), then dispatched 
 - **Two stores out of the box** — in-memory for tests/dev, SQL (MySQL / SQLite) for production
 - **Two processors out of the box** — standard (fail-fast for local/CI) and silent (log-and-continue for production)
 - **Outbox pattern** — events transition `pending → processing → processed`, with the intermediate state surviving worker crashes
-- **Per-listener retries** — configurable `RetryPolicy` plus a hybrid in-process + persisted `RedeliveryTracker`; a single failing listener of an event is retried independently while the others continue
+- **Per-listener retries** — configurable `RetryPolicy` plus a persisted `RedeliveryTracker`; a single failing listener of an event is retried independently while the others continue
 - **Ignored exceptions** — pass a list of `Throwable` classes to silently swallow expected domain failures (no retry, no log, no DB row)
 - **Status audit trail** — every event status transition is recorded in `event_outbox_status` for ops visibility
 - **Scheduled delivery** — set `publishAt` in the future; the processor only picks up events whose time has come
@@ -58,7 +58,7 @@ composer require hivesper/php-events
 | `EventPublisher` | Serializes a domain event and pushes it into the store, returning its ID |
 | `EventSubscriberMap` | Registry of `name → callable[]` mappings |
 | `EventProcessor` | Interface — drains the store and dispatches to subscribers |
-| `SequentialEventProcessor` | Built-in processor — dispatches events one by one with optional retry policy; exceptions propagate after retries are exhausted (fail-fast) |
+| `SequentialEventProcessor` | Built-in processor — dispatches events one by one with optional retry policy; exceptions propagate after retries are exhausted (fail-fast). Call `processNextRedelivery()` in a separate scheduled job to pick up persisted retries. |
 | `SilentSequentialEventProcessor` | Same as above but catches per-listener failures after retries are exhausted, logs them via PSR-3, and continues |
 | `EventSubscriberBuilder` | Fluent builder that produces a ready-to-use `EventSubscriberMap` |
 | `RetryPolicy` | Interface — decides whether and when to retry a failed listener |
@@ -311,7 +311,7 @@ $store = new SqlEventStore($pdo); // schema created here if not present
 CREATE TABLE event_outbox (
     id         VARCHAR(36)  NOT NULL PRIMARY KEY,
     name       VARCHAR(255) NOT NULL,
-    status     VARCHAR(255) NOT NULL,  -- 'pending' | 'processing' | 'processed' | 'failed'
+    status     VARCHAR(255) NOT NULL,  -- 'pending' | 'processing' | 'processed'
     payload    JSON         NOT NULL,
     created_at DATETIME(6)  NOT NULL,
     publish_at DATETIME(6)  NOT NULL,
@@ -518,14 +518,14 @@ durable failure tracking on a **per-(event, listener)** basis: if a single liste
 fails, only that listener is retried — the others continue to run and successful deliveries are
 not re-fired.
 
-The model is **hybrid**:
-
-1. A small in-process retry burst (sleep + retry) for fast-recovery transient failures.
-2. A persisted, scheduled redelivery for slower-recovery failures and for surviving worker crashes.
+The model is **fully async**: when a listener fails, the failure is persisted to the redelivery
+table immediately and the main outbox worker moves on to the next event. A separate scheduled
+job calls `processNextRedelivery()` to pick up due retries — the retry policy is consulted at
+that point to decide whether to re-schedule or mark permanently failed.
 
 Once configured, the same retry behaviour applies to both `SequentialEventProcessor` (which
-fails fast after retries are exhausted) and `SilentSequentialEventProcessor` (which logs and
-continues).
+fails fast on the first attempt when no tracker is configured, or after `nextRetryAt` returns
+null on a retry) and `SilentSequentialEventProcessor` (which logs and continues).
 
 ### Retry policy
 
@@ -546,8 +546,8 @@ Two implementations ship out of the box:
 - **`NoRetryPolicy`** *(default)* — never retries. Same behaviour as before this feature existed,
   so wiring up the new processor parameters without choosing a policy is a no-op.
 - **`ExponentialBackoffRetryPolicy`** — five total attempts (one initial + four retries) with
-  delays of `100ms, 500ms, 1min, 5min` by default. The 100ms / 500ms retries happen in-process;
-  the 1min / 5min retries are persisted and picked up on a future processor run.
+  delays of `100ms, 500ms, 1min, 5min` by default. Every retry is persisted to the redelivery
+  table and picked up on a future `processNextRedelivery()` run.
 
 ```php
 use Vesper\Tool\Event\Infrastructure\Retry\ExponentialBackoffRetryPolicy;
@@ -559,10 +559,9 @@ $retryPolicy = new ExponentialBackoffRetryPolicy();
 $retryPolicy = new ExponentialBackoffRetryPolicy(delaysMs: [50, 250, 1_000, 30_000]);
 ```
 
-The processor classifies each delay as **in-process** (sleep + retry on the same worker) when it
-is less than `inProcessRetryThresholdMs` (default `1000`), and **persisted** otherwise. Persisted
-retries require a `RedeliveryTracker` to be configured — without one, a long-delay retry is
-treated as exhausted and reported.
+Retries require a `RedeliveryTracker` to be configured — without one, any failure is treated
+as permanent and rethrown by `SequentialEventProcessor` (or logged and swallowed by
+`SilentSequentialEventProcessor`).
 
 ### Redelivery tracker
 
@@ -602,15 +601,19 @@ $processor = new SilentSequentialEventProcessor(
 $processor->process($store);
 ```
 
-A single call to `process()` will:
+`process()` drains the pending outbox and dispatches each event to its listeners.
 
-1. Drain new pending events from the store and dispatch them to every registered listener.
-2. After the main queue is empty, drain any **due** redeliveries — listener failures from earlier
-   runs whose `next_retry_at` has now passed.
+Redeliveries are processed separately — call `processNextRedelivery()` in its own scheduled
+job. It picks up one due retry using the same `FOR UPDATE SKIP LOCKED` strategy as `next()`:
 
-Long backoffs (e.g. the default 1min / 5min steps) won't be drained until a future `process()`
-call after their `next_retry_at` passes — which is exactly how outbox workers already poll on a
-schedule.
+```php
+// In a separate cron task / queue worker:
+$processor->processNextRedelivery(); // picks up the next due retry, if any
+```
+
+Long backoffs (e.g. the default 1min / 5min steps) won't be picked up until a future
+`processNextRedelivery()` call after their `next_retry_at` passes — which is exactly how
+outbox workers already poll on a schedule.
 
 ### Ignored exceptions (skip-list)
 
@@ -671,8 +674,7 @@ that implements `__invoke()` instead.
 ```php
 RawEventStatus::pending     // event is waiting to be processed
 RawEventStatus::processing  // event has been claimed by a worker; dispatch in flight
-RawEventStatus::processed   // event was successfully dispatched to all listeners
-RawEventStatus::failed      // reserved for future event-level fatal use (see "Future work")
+RawEventStatus::processed   // event was dispatched to every listener (per-listener outcomes live in event_outbox_redelivery)
 ```
 
 ---
@@ -701,15 +703,13 @@ WHERE status = 'processing'
   );
 ```
 
-A future sweeper should support three recovery modes:
+A future sweeper should support two recovery modes:
 
 - **Re-claim** (`processing → pending`) — safe **only** if listeners are idempotent. Re-dispatch
   may re-fire listeners that already succeeded.
 - **Force-complete** (`processing → processed`) — safe only when the dispatch is believed to
   have finished but the bookkeeping commit was lost. Should write a `processed` audit row marked
   as recovered so dashboards can distinguish organic vs. recovered transitions.
-- **Mark dead** (`processing → failed`) — finally puts `RawEventStatus::failed` to use; operator
-  decides next steps.
 
 ### Schema columns to consider when the monitor lands
 
@@ -732,13 +732,6 @@ Without waiting for the in-library monitor, these are queryable from the existin
 - "Events stuck in `processing` for more than T" — the SQL above.
 - "Listeners with permanent failures" — `SELECT * FROM event_outbox_redelivery WHERE status = 'failed'`.
 - "Average time-between rows in `event_outbox_status` by status pair" — reveals dispatch latency.
-
-### What `RawEventStatus::failed` is reserved for
-
-A natural future use: a sweep over `event_outbox_redelivery` that, when **every** listener for
-an event has permanently failed and there's nothing left to retry, marks the event row itself
-`failed`. Computable from the existing tables; out of scope for this PR. The enum case is
-documented as reserved so future readers don't think it's dead code.
 
 ### Reference reading
 

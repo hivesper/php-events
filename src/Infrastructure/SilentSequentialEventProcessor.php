@@ -21,13 +21,12 @@ class SilentSequentialEventProcessor extends SequentialEventProcessor
      */
     public function __construct(
         EventSubscriberMap $subscribers,
-        private readonly LoggerInterface $logger,
+        private LoggerInterface $logger,
         HandlerResolver $resolver = new DefaultHandlerResolver(),
         EventHydrator $hydrator = new JacksonHydrator(),
         RetryPolicy $retryPolicy = new NoRetryPolicy(),
         ?RedeliveryTracker $redeliveryTracker = null,
         array $ignoredExceptions = [],
-        int $inProcessRetryThresholdMs = 1000,
     ) {
         parent::__construct(
             subscribers: $subscribers,
@@ -36,7 +35,6 @@ class SilentSequentialEventProcessor extends SequentialEventProcessor
             retryPolicy: $retryPolicy,
             redeliveryTracker: $redeliveryTracker,
             ignoredExceptions: $ignoredExceptions,
-            inProcessRetryThresholdMs: $inProcessRetryThresholdMs,
         );
     }
 

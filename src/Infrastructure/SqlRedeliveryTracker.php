@@ -6,7 +6,6 @@ use Carbon\CarbonImmutable;
 use JsonException;
 use Override;
 use PDO;
-use PDOException;
 use RuntimeException;
 use Throwable;
 use Vesper\Tool\Event\DueRedelivery;
@@ -18,18 +17,11 @@ use Vesper\Tool\Event\RedeliveryTracker;
 
 readonly class SqlRedeliveryTracker implements RedeliveryTracker
 {
-    public const string STATUS_PENDING = 'pending_retry';
-    public const string STATUS_FAILED = 'failed';
-    public const string STATUS_SUCCEEDED = 'succeeded';
-
     public function __construct(private PDO $connection)
     {
         $this->ensureRedeliverySchema();
     }
 
-    /**
-     * @throws PDOException
-     */
     #[Override]
     public function schedule(
         RawEvent $event,
@@ -71,7 +63,7 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         $this->connection->prepare($sql)->execute([
             'event_id' => $event->id,
             'listener' => $listener,
-            'status' => self::STATUS_PENDING,
+            'status' => RedeliveryStatus::PendingRetry->value,
             'attempt_number' => $attemptNumber,
             'next_retry_at' => $nextRetryAtSql,
             'last_error' => $errorMessage,
@@ -80,10 +72,7 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         ]);
     }
 
-    /**
-     * @throws JsonException
-     * @throws PDOException
-     */
+    /** @throws JsonException */
     #[Override]
     public function nextDue(): ?DueRedelivery
     {
@@ -103,7 +92,6 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
                 FROM event_outbox_redelivery r
                 INNER JOIN event_outbox e ON e.id = r.event_id
                 WHERE r.status = :status
-                  AND r.next_retry_at IS NOT NULL
                   AND r.next_retry_at <= :now
                 ORDER BY r.next_retry_at
                 LIMIT 1 {$lockClause}
@@ -111,7 +99,7 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         );
 
         $stmt->execute([
-            'status' => self::STATUS_PENDING,
+            'status' => RedeliveryStatus::PendingRetry->value,
             'now' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
         ]);
 
@@ -141,9 +129,6 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         );
     }
 
-    /**
-     * @throws PDOException
-     */
     #[Override]
     public function markFailedPermanently(string $eventId, string $listener, Throwable $lastError): void
     {
@@ -151,13 +136,12 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
             <<<SQL
             UPDATE event_outbox_redelivery
                 SET status = :status,
-                    next_retry_at = NULL,
                     last_error = :last_error,
                     updated_at = :updated_at
                 WHERE event_id = :event_id AND listener = :listener
             SQL,
         )->execute([
-            'status' => self::STATUS_FAILED,
+            'status' => RedeliveryStatus::Failed->value,
             'last_error' => self::formatError($lastError),
             'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
             'event_id' => $eventId,
@@ -165,9 +149,6 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         ]);
     }
 
-    /**
-     * @throws PDOException
-     */
     #[Override]
     public function markSucceeded(string $eventId, string $listener): void
     {
@@ -175,21 +156,17 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
             <<<SQL
             UPDATE event_outbox_redelivery
                 SET status = :status,
-                    next_retry_at = NULL,
                     updated_at = :updated_at
                 WHERE event_id = :event_id AND listener = :listener
             SQL,
         )->execute([
-            'status' => self::STATUS_SUCCEEDED,
+            'status' => RedeliveryStatus::Succeeded->value,
             'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
             'event_id' => $eventId,
             'listener' => $listener,
         ]);
     }
 
-    /**
-     * @throws PDOException
-     */
     #[Override]
     public function retryNow(string $eventId, string $listener): void
     {
@@ -204,7 +181,7 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
                 WHERE event_id = :event_id AND listener = :listener
             SQL,
         )->execute([
-            'status' => self::STATUS_PENDING,
+            'status' => RedeliveryStatus::PendingRetry->value,
             'next_retry_at' => $now,
             'updated_at' => $now,
             'event_id' => $eventId,

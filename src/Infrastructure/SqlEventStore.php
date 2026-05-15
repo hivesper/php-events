@@ -93,6 +93,7 @@ readonly class SqlEventStore implements EventStore
             );
         } catch (Throwable $e) {
             $this->rollBackIfStarted($startedTransaction);
+
             throw $e;
         }
     }
@@ -124,6 +125,7 @@ readonly class SqlEventStore implements EventStore
             $this->commitIfStarted($startedTransaction);
         } catch (Throwable $e) {
             $this->rollBackIfStarted($startedTransaction);
+
             throw $e;
         }
     }
@@ -180,6 +182,7 @@ readonly class SqlEventStore implements EventStore
         }
 
         $this->connection->beginTransaction();
+
         return true;
     }
 

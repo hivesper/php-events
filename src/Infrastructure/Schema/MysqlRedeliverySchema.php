@@ -3,15 +3,9 @@
 namespace Vesper\Tool\Event\Infrastructure\Schema;
 
 use PDO;
-use PDOException;
 
 class MysqlRedeliverySchema
 {
-    /**
-     * Ensure the redelivery table and indexes exist.
-     *
-     * @throws PDOException
-     */
     public static function create(PDO $connection): void
     {
         self::createIfNeeded(
@@ -20,17 +14,17 @@ class MysqlRedeliverySchema
             creationQuery: <<<SQL
                 CREATE TABLE event_outbox_redelivery (
                     event_id        VARCHAR(36)  NOT NULL,
-                    listener        VARCHAR(255) NOT NULL,
+                    listener        VARCHAR(500) NOT NULL,
                     status          VARCHAR(32)  NOT NULL,
                     attempt_number  INT          NOT NULL,
-                    next_retry_at   DATETIME(6)  NULL,
+                    next_retry_at   DATETIME(6)  NOT NULL,
                     last_error      TEXT         NULL,
                     created_at      DATETIME(6)  NOT NULL,
                     updated_at      DATETIME(6)  NOT NULL,
 
                     PRIMARY KEY (event_id, listener),
                     INDEX idx_redelivery_due (status, next_retry_at),
-                    CONSTRAINT fk_redelivery_event FOREIGN KEY (event_id) REFERENCES event_outbox(id)
+                    INDEX idx_redelivery_event_id (event_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             SQL,
         );
