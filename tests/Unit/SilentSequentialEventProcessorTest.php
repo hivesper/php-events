@@ -62,6 +62,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $event->id,
                     'listener'  => 'Closure',
+                    'attempt'   => 1,
                     'exception' => $exception,
                 ],
             );
@@ -89,6 +90,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $event->id,
                     'listener'  => 'Closure',
+                    'attempt'   => 1,
                     'exception' => $exception,
                 ],
             );
@@ -138,6 +140,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $event->id,
                     'listener'  => ThrowingListener::class,
+                    'attempt'   => 1,
                     'exception' => new RuntimeException('ThrowingListener always fails.'),
                 ]
             );
@@ -168,6 +171,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $firstEvent->id,
                     'listener'  => 'Closure',
+                    'attempt'   => 1,
                     'exception' => $exception,
                 ],
             );
@@ -203,6 +207,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $event->id,
                     'listener'  => 'Closure',
+                    'attempt'   => 1,
                     'exception' => $exception,
                 ],
             );
@@ -277,6 +282,7 @@ class SilentSequentialEventProcessorTest extends TestCase
                     'event'     => 'order.placed',
                     'event_id'  => $event->id,
                     'listener'  => 'Closure',
+                    'attempt'   => 2,
                     'exception' => $exception,
                 ],
             );

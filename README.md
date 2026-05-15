@@ -499,6 +499,7 @@ Failed to dispatch event to listener.
     event:     "order.placed"
     event_id:  "019612a3-..."
     listener:  "App\Listeners\SendConfirmationEmail"  // or "Closure"
+    attempt:   3                                       // the attempt that just failed; 1 if no retry policy
     exception: RuntimeException: ...
 }
 ```
