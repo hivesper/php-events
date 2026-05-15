@@ -3,7 +3,6 @@
 namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
-use JsonException;
 use Override;
 use PDO;
 use RuntimeException;
@@ -69,7 +68,6 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         ]);
     }
 
-    /** @throws JsonException */
     #[Override]
     public function nextDue(): ?DueRedelivery
     {

@@ -4,10 +4,8 @@ namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterval;
-use JsonException;
 use Override;
 use PDO;
-use PDOException;
 use RuntimeException;
 use Throwable;
 use Vesper\Tool\Event\EventStore;
@@ -23,13 +21,6 @@ readonly class SqlEventStore implements EventStore
         $this->ensureOutboxSchema();
     }
 
-    /**
-     * Add a new event to the outbox. Inserts both the event row and a
-     * 'pending' audit row in the caller's transaction.
-     *
-     * @throws JsonException
-     * @throws PDOException
-     */
     #[Override]
     public function add(RawEvent $event): void
     {
@@ -52,14 +43,6 @@ readonly class SqlEventStore implements EventStore
         $this->insertStatusAudit($event->id, $event->status->value);
     }
 
-    /**
-     * Claim the next pending event for this worker (worker-safe via FOR UPDATE
-     * SKIP LOCKED on MySQL). Transitions the row from `pending` to `processing`
-     * inside a single transaction together with the audit row insert.
-     *
-     * @throws JsonException
-     * @throws PDOException
-     */
     #[Override]
     public function next(): ?RawEvent
     {
@@ -99,14 +82,7 @@ readonly class SqlEventStore implements EventStore
         }
     }
 
-    /**
-     * Advance an event from `processing` to `processed`. Inserts the matching
-     * audit row in the same transaction. The UPDATE is guarded with
-     * `status = 'processing'` so a stuck row that's already been recovered by
-     * a sweep won't be silently overwritten.
-     *
-     * @throws PDOException
-     */
+    /** UPDATE is guarded by status='processing' so a row a sweep already reclaimed is not overwritten. */
     #[Override]
     public function markProcessed(string $eventId): void
     {
@@ -132,15 +108,11 @@ readonly class SqlEventStore implements EventStore
     }
 
     /**
-     * Reset events wedged in `processing` back to `pending` so a worker can claim them again.
-     * A row counts as stuck when its most recent `processing` audit entry is older than
-     * $olderThan. Writes a `pending` audit row tagged "Recovered from stuck processing state"
-     * for each recovery so dashboards can distinguish organic vs. recovered transitions.
-     * Returns the number of events recovered.
-     *
-     * Call from a separate scheduled job; idempotent, safe to run alongside the main worker.
-     *
-     * @throws PDOException
+     * Reset events wedged in `processing` back to `pending`. A row is "stuck" when its most
+     * recent `processing` audit entry is older than $olderThan. Writes a `pending` audit row
+     * tagged "Recovered from stuck processing state" so dashboards can tell organic vs. recovered
+     * transitions apart. Returns the number of events recovered. Call from a separate scheduled
+     * job; safe to run alongside the main worker.
      */
     public function recoverStuckEvents(CarbonInterval $olderThan): int
     {

@@ -5,13 +5,6 @@ namespace Vesper\Tool\Event;
 use Carbon\CarbonImmutable;
 use Throwable;
 
-/**
- * The canonical domain entity for a per-(event, listener) redelivery row —
- * the in-memory analogue of an event_outbox_redelivery SQL row.
- *
- * Fully immutable: lifecycle transitions return a new instance with the
- * relevant fields updated, mirroring the RawEvent / RawEventStatus pattern.
- */
 readonly class Redelivery
 {
     private function __construct(
@@ -26,7 +19,6 @@ readonly class Redelivery
     ) {
     }
 
-    /** Build a fresh pending_retry row from a schedule request. */
     public static function fromRequest(RedeliveryRequest $request): self
     {
         $now = CarbonImmutable::now();
@@ -43,7 +35,6 @@ readonly class Redelivery
         );
     }
 
-    /** Reconstruct from persisted storage. */
     public static function retrieve(
         RawEvent $event,
         string $listener,
@@ -66,7 +57,6 @@ readonly class Redelivery
         );
     }
 
-    /** Re-schedule an existing row: bumps attempt count, resets status to pending_retry, preserves createdAt. */
     public function rescheduled(RedeliveryRequest $request): self
     {
         return new self(
@@ -109,7 +99,6 @@ readonly class Redelivery
         );
     }
 
-    /** Reset to pending_retry with next_retry_at = now(), preserving attempt count. */
     public function queuedForImmediateRetry(): self
     {
         $now = CarbonImmutable::now();

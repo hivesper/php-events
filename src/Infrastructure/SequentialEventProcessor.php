@@ -44,15 +44,8 @@ class SequentialEventProcessor implements EventProcessor
     }
 
     /**
-     * Dispatch the next due redelivery, if any. Call this from a separate
-     * scheduled job so persisted retries are picked up independently of
-     * the main outbox worker.
-     *
-     * The tracker holds the SELECT ... FOR UPDATE row lock through dispatch
-     * via processNextDue(), so concurrent cron workers cannot pick up the
-     * same row. Dispatch's fail-fast throw is deferred until after the
-     * transaction commits so the schedule / markFailedPermanently side
-     * effects persist.
+     * Dispatch's fail-fast throw is deferred until processNextDue() has committed, so the
+     * schedule / markFailedPermanently side effects persist instead of getting rolled back.
      */
     public function processNextRedelivery(): void
     {
@@ -96,7 +89,7 @@ class SequentialEventProcessor implements EventProcessor
         return null;
     }
 
-    /** @param int $attemptsMade attempts already made before this call (0 for fresh, ≥1 from redelivery) */
+    /** @param int $attemptsMade attempts already made (0 from process(), ≥1 from processNextRedelivery()) */
     protected function dispatch(RawEvent $event, callable|string $subscriber, int $attemptsMade = 0): void
     {
         $callable = $this->resolver->resolve($subscriber);
@@ -133,7 +126,7 @@ class SequentialEventProcessor implements EventProcessor
         }
     }
 
-    /** Called when a listener's failure can no longer be retried. Subclasses can extend (e.g. log). */
+    /** Hook for subclasses; called once a listener's failure can no longer be retried. */
     protected function onPermanentFailure(RawEvent $event, callable|string $subscriber, Throwable $error): void
     {
         $this->redeliveryTracker?->markFailedPermanently($event->id, $this->listenerKey($subscriber), $error);

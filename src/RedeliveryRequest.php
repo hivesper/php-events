@@ -6,12 +6,6 @@ use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use Throwable;
 
-/**
- * Input to RedeliveryTracker::schedule() — the per-(event, listener) state captured
- * at the moment a dispatch failed and the retry policy chose to schedule another
- * attempt. Invariants are enforced in the constructor so callers can't quietly
- * persist a nonsensical row (attempt zero, empty listener identifier, etc.).
- */
 readonly class RedeliveryRequest
 {
     public function __construct(

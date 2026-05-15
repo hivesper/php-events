@@ -44,10 +44,6 @@ class SilentSequentialEventProcessor extends SequentialEventProcessor
         try {
             parent::dispatch($event, $subscriber, $attemptsMade);
         } catch (Throwable $exception) {
-            // Parent dispatch only throws after incrementing its local attempt counter and
-            // either persisting markFailedPermanently or determining no tracker is configured —
-            // so the attempt that just failed is $attemptsMade + 1 (the value entering this call
-            // plus the attempt parent dispatch just completed).
             $this->logger->error('Failed to dispatch event to listener.', [
                 'event' => $event->name,
                 'event_id' => $event->id,
