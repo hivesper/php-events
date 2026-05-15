@@ -27,8 +27,29 @@ interface RedeliveryTracker
     /**
      * Pick up the next due redelivery (worker-safe; locks the row on MySQL).
      * Returns null when none are due.
+     *
+     * Note: callers that intend to dispatch the returned redelivery should use
+     * processNextDue() instead — that wraps the read and the subsequent state
+     * transition in a single transaction, so the row lock is held through the
+     * dispatch and concurrent workers cannot pick up the same row.
      */
     public function nextDue(): ?DueRedelivery;
+
+    /**
+     * Atomically claim the next due redelivery and pass it to $handler. SQL
+     * implementations open a transaction so the row lock acquired by nextDue()
+     * is held through the handler call, preventing concurrent workers from
+     * picking up the same row.
+     *
+     * The handler is expected to drive dispatch and the resulting state
+     * transition (schedule / markSucceeded / markFailedPermanently). It must
+     * not throw — wrap dispatch in your own try/catch if you need to swallow
+     * or defer the exception, otherwise the transaction will roll back and
+     * those state transitions will be lost.
+     *
+     * @param callable(DueRedelivery): void $handler
+     */
+    public function processNextDue(callable $handler): void;
 
     /**
      * Mark a redelivery as permanently failed — no further automatic attempts.

@@ -46,6 +46,12 @@ class SequentialEventProcessor implements EventProcessor
      * Dispatch the next due redelivery, if any. Call this from a separate
      * scheduled job so persisted retries are picked up independently of
      * the main outbox worker.
+     *
+     * The tracker holds the SELECT ... FOR UPDATE row lock through dispatch
+     * via processNextDue(), so concurrent cron workers cannot pick up the
+     * same row. Dispatch's fail-fast throw is deferred until after the
+     * transaction commits so the schedule / markFailedPermanently side
+     * effects persist.
      */
     public function processNextRedelivery(): void
     {
@@ -53,24 +59,30 @@ class SequentialEventProcessor implements EventProcessor
             return;
         }
 
-        $due = $this->redeliveryTracker->nextDue();
+        $deferredException = null;
 
-        if ($due === null) {
-            return;
+        $this->redeliveryTracker->processNextDue(function ($due) use (&$deferredException): void {
+            $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
+
+            if ($subscriber === null) {
+                $this->redeliveryTracker->markFailedPermanently(
+                    $due->event->id,
+                    $due->listener,
+                    new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
+                );
+                return;
+            }
+
+            try {
+                $this->dispatch($due->event, $subscriber, $due->attemptNumber);
+            } catch (Throwable $e) {
+                $deferredException = $e;
+            }
+        });
+
+        if ($deferredException !== null) {
+            throw $deferredException;
         }
-
-        $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
-
-        if ($subscriber === null) {
-            $this->redeliveryTracker->markFailedPermanently(
-                $due->event->id,
-                $due->listener,
-                new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
-            );
-            return;
-        }
-
-        $this->dispatch($due->event, $subscriber, $due->attemptNumber);
     }
 
     private function findRegisteredSubscriber(string $eventName, string $listenerKey): callable|string|null

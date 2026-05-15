@@ -94,6 +94,18 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
+    public function processNextDue(callable $handler): void
+    {
+        $due = $this->nextDue();
+
+        if ($due === null) {
+            return;
+        }
+
+        $handler($due);
+    }
+
+    #[Override]
     public function retryNow(string $eventId, string $listener): void
     {
         $key = self::key($eventId, $listener);

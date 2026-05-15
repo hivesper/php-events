@@ -168,6 +168,26 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
+    public function processNextDue(callable $handler): void
+    {
+        $startedTransaction = $this->beginTransactionIfNeeded();
+
+        try {
+            $due = $this->nextDue();
+
+            if ($due !== null) {
+                $handler($due);
+            }
+
+            $this->commitIfStarted($startedTransaction);
+        } catch (Throwable $e) {
+            $this->rollBackIfStarted($startedTransaction);
+
+            throw $e;
+        }
+    }
+
+    #[Override]
     public function retryNow(string $eventId, string $listener): void
     {
         $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');
@@ -192,6 +212,31 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
     private static function formatError(Throwable $error): string
     {
         return $error::class . ': ' . $error->getMessage();
+    }
+
+    private function beginTransactionIfNeeded(): bool
+    {
+        if ($this->connection->inTransaction()) {
+            return false;
+        }
+
+        $this->connection->beginTransaction();
+
+        return true;
+    }
+
+    private function commitIfStarted(bool $started): void
+    {
+        if ($started) {
+            $this->connection->commit();
+        }
+    }
+
+    private function rollBackIfStarted(bool $started): void
+    {
+        if ($started && $this->connection->inTransaction()) {
+            $this->connection->rollBack();
+        }
     }
 
     private function ensureRedeliverySchema(): void

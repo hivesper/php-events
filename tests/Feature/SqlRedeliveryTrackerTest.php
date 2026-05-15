@@ -139,6 +139,91 @@ class SqlRedeliveryTrackerTest extends TestCase
         self::assertSame('failed', $this->fetchRedeliveryStatus($event->id, 'App\\Listener'));
     }
 
+    public function test_process_next_due_runs_handler_inside_a_transaction(): void
+    {
+        $event = $this->insertEvent();
+        $this->tracker->schedule(
+            event: $event,
+            listener: 'App\\Listener',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('boom'),
+        );
+
+        $observedInTransaction = null;
+
+        $this->tracker->processNextDue(function () use (&$observedInTransaction): void {
+            $observedInTransaction = $this->pdo->inTransaction();
+        });
+
+        self::assertTrue($observedInTransaction, 'handler ran inside an active transaction');
+        self::assertFalse($this->pdo->inTransaction(), 'transaction committed after processNextDue returned');
+    }
+
+    public function test_process_next_due_commits_handler_side_effects(): void
+    {
+        $event = $this->insertEvent();
+        $this->tracker->schedule(
+            event: $event,
+            listener: 'App\\Listener',
+            attemptNumber: 5,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('boom'),
+        );
+
+        $this->tracker->processNextDue(function () use ($event): void {
+            $this->tracker->markFailedPermanently(
+                $event->id,
+                'App\\Listener',
+                new RuntimeException('final'),
+            );
+        });
+
+        self::assertSame('failed', $this->fetchRedeliveryStatus($event->id, 'App\\Listener'));
+        self::assertNull($this->tracker->nextDue());
+    }
+
+    public function test_process_next_due_rolls_back_when_handler_throws(): void
+    {
+        $event = $this->insertEvent();
+        $this->tracker->schedule(
+            event: $event,
+            listener: 'App\\Listener',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('boom'),
+        );
+
+        try {
+            $this->tracker->processNextDue(function () use ($event): void {
+                $this->tracker->markSucceeded($event->id, 'App\\Listener');
+                throw new RuntimeException('handler exploded');
+            });
+            self::fail('expected exception');
+        } catch (RuntimeException $e) {
+            self::assertSame('handler exploded', $e->getMessage());
+        }
+
+        self::assertSame(
+            'pending_retry',
+            $this->fetchRedeliveryStatus($event->id, 'App\\Listener'),
+            'markSucceeded rolled back because the handler threw — caller must catch and defer to keep side effects',
+        );
+        self::assertFalse($this->pdo->inTransaction(), 'transaction rolled back, not left dangling');
+    }
+
+    public function test_process_next_due_is_a_noop_when_nothing_is_due(): void
+    {
+        $invoked = false;
+
+        $this->tracker->processNextDue(function () use (&$invoked): void {
+            $invoked = true;
+        });
+
+        self::assertFalse($invoked, 'handler not invoked when no row is due');
+        self::assertFalse($this->pdo->inTransaction(), 'transaction committed even when no row was found');
+    }
+
     public function test_retry_now_re_queues_a_permanently_failed_row_preserving_attempt_count(): void
     {
         $event = $this->insertEvent();
