@@ -9,9 +9,9 @@ use Vesper\Tool\Event\DueRedelivery;
 use Vesper\Tool\Event\Redelivery;
 use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryStatus;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 
-class InMemoryRedeliveryTracker implements RedeliveryTracker
+class InMemoryRedeliveryStore implements RedeliveryStore
 {
     /** @var array<string, Redelivery> */
     private array $rows = [];
@@ -27,12 +27,13 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
-    public function nextDue(): ?DueRedelivery
+    public function next(): ?DueRedelivery
     {
         $now = CarbonImmutable::now();
         $candidate = null;
+        $candidateKey = null;
 
-        foreach ($this->rows as $row) {
+        foreach ($this->rows as $key => $row) {
             if ($row->status !== RedeliveryStatus::PendingRetry) {
                 continue;
             }
@@ -41,12 +42,15 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
             }
             if ($candidate === null || $row->nextRetryAt->lessThan($candidate->nextRetryAt)) {
                 $candidate = $row;
+                $candidateKey = $key;
             }
         }
 
-        if ($candidate === null) {
+        if ($candidate === null || $candidateKey === null) {
             return null;
         }
+
+        $this->rows[$candidateKey] = $candidate->claimed();
 
         return new DueRedelivery(
             event: $candidate->event,
@@ -56,23 +60,11 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
-    public function processNextDue(callable $handler): void
-    {
-        $due = $this->nextDue();
-
-        if ($due === null) {
-            return;
-        }
-
-        $handler($due);
-    }
-
-    #[Override]
     public function markFailedPermanently(string $eventId, string $listener, Throwable $lastError): void
     {
         $key = self::key($eventId, $listener);
 
-        if (!isset($this->rows[$key])) {
+        if (!isset($this->rows[$key]) || $this->rows[$key]->status !== RedeliveryStatus::Dispatching) {
             return;
         }
 
@@ -84,7 +76,7 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
     {
         $key = self::key($eventId, $listener);
 
-        if (!isset($this->rows[$key])) {
+        if (!isset($this->rows[$key]) || $this->rows[$key]->status !== RedeliveryStatus::Dispatching) {
             return;
         }
 

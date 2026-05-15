@@ -13,10 +13,10 @@ use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\HandlerResolver;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
-use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryTracker;
+use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryStore;
 use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
 use Vesper\Tool\Event\RedeliveryRequest;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SequentialEventProcessorTest extends TestCase
@@ -252,7 +252,7 @@ class SequentialEventProcessorTest extends TestCase
             throw $exception;
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->once())
             ->method('schedule')
             ->with($this->callback(
@@ -262,12 +262,12 @@ class SequentialEventProcessorTest extends TestCase
                     && $r->attemptNumber === 1
                     && $r->lastError === $exception,
             ));
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $processor = new SequentialEventProcessor(
             $this->subscribers,
             retryPolicy: self::policyReturning(retryDelayMs: 50),
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         $processor->process($this->store);
@@ -282,14 +282,14 @@ class SequentialEventProcessorTest extends TestCase
             throw $exception;
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->never())->method('schedule');
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $processor = new SequentialEventProcessor(
             $this->subscribers,
             retryPolicy: self::policyReturning(retryDelayMs: 50, exhaustAfter: 0),
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         $this->expectExceptionObject($exception);
@@ -321,13 +321,13 @@ class SequentialEventProcessorTest extends TestCase
 
         $this->subscribers->subscribe('order.placed', function () {});
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->once())
             ->method('markSucceeded')
             ->with($event->id, 'Closure');
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
-        $processor = new SequentialEventProcessor($this->subscribers, redeliveryTracker: $tracker);
+        $processor = new SequentialEventProcessor($this->subscribers, redeliveryStore: $tracker);
         $processor->process($this->store);
     }
 
@@ -341,16 +341,16 @@ class SequentialEventProcessorTest extends TestCase
             throw new IgnorableExceptionStub('expected domain failure');
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->never())->method('schedule');
         $tracker->expects($this->never())->method('markFailedPermanently');
         $tracker->expects($this->never())->method('markSucceeded');
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $processor = new SequentialEventProcessor(
             $this->subscribers,
             retryPolicy: self::policyReturning(retryDelayMs: 10),
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
             ignoredExceptions: [IgnorableExceptionStub::class],
         );
 
@@ -363,7 +363,7 @@ class SequentialEventProcessorTest extends TestCase
     {
         $event = TestEventFactory::retrieveOrderPlaced();
 
-        $tracker = new InMemoryRedeliveryTracker();
+        $tracker = new InMemoryRedeliveryStore();
         $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
@@ -377,11 +377,11 @@ class SequentialEventProcessorTest extends TestCase
             $received = $e;
         });
 
-        $processor = new SequentialEventProcessor($this->subscribers, redeliveryTracker: $tracker);
+        $processor = new SequentialEventProcessor($this->subscribers, redeliveryStore: $tracker);
         $processor->processNextRedelivery();
 
         self::assertNotNull($received, 'redelivery dispatch invoked the listener');
-        self::assertNull($tracker->nextDue(), 'redelivery row marked succeeded after dispatch');
+        self::assertNull($tracker->next(), 'redelivery row marked succeeded after dispatch');
     }
 
     public function test_calls_mark_failed_permanently_when_no_more_retries_with_tracker(): void
@@ -393,14 +393,14 @@ class SequentialEventProcessorTest extends TestCase
             throw $exception;
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->once())->method('markFailedPermanently');
         $tracker->expects($this->never())->method('schedule');
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $processor = new SequentialEventProcessor(
             $this->subscribers,
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         try {

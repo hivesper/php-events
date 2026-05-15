@@ -57,6 +57,20 @@ readonly class Redelivery
         );
     }
 
+    public function claimed(): self
+    {
+        return new self(
+            event: $this->event,
+            listener: $this->listener,
+            status: RedeliveryStatus::Dispatching,
+            attemptNumber: $this->attemptNumber,
+            nextRetryAt: $this->nextRetryAt,
+            lastError: $this->lastError,
+            createdAt: $this->createdAt,
+            updatedAt: CarbonImmutable::now(),
+        );
+    }
+
     public function rescheduled(RedeliveryRequest $request): self
     {
         return new self(

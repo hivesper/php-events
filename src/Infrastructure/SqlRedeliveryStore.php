@@ -3,6 +3,7 @@
 namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterval;
 use Override;
 use PDO;
 use RuntimeException;
@@ -14,9 +15,9 @@ use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
 use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryStatus;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 
-readonly class SqlRedeliveryTracker implements RedeliveryTracker
+readonly class SqlRedeliveryStore implements RedeliveryStore
 {
     public function __construct(private PDO $connection)
     {
@@ -69,7 +70,159 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
-    public function nextDue(): ?DueRedelivery
+    public function next(): ?DueRedelivery
+    {
+        $startedTransaction = $this->beginTransactionIfNeeded();
+
+        try {
+            $row = $this->fetchNextDueRow();
+
+            if ($row === null) {
+                $this->commitIfStarted($startedTransaction);
+                return null;
+            }
+
+            $this->connection->prepare(
+                <<<SQL
+                UPDATE event_outbox_redelivery
+                    SET status = :status,
+                        updated_at = :updated_at
+                    WHERE event_id = :event_id AND listener = :listener
+                SQL,
+            )->execute([
+                'status' => RedeliveryStatus::Dispatching->value,
+                'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
+                'event_id' => $row['event_id'],
+                'listener' => $row['listener'],
+            ]);
+
+            $this->commitIfStarted($startedTransaction);
+
+            /** @var array<string, mixed> $payload */
+            $payload = json_decode($row['event_payload'], true, flags: JSON_THROW_ON_ERROR);
+
+            $event = RawEvent::retrieve(
+                id: $row['event_id'],
+                name: $row['event_name'],
+                status: RawEventStatus::from($row['event_status']),
+                payload: $payload,
+                createdAt: new CarbonImmutable($row['event_created_at']),
+                publishAt: new CarbonImmutable($row['event_publish_at']),
+            );
+
+            return new DueRedelivery(
+                event: $event,
+                listener: $row['listener'],
+                attemptNumber: (int) $row['attempt_number'],
+            );
+        } catch (Throwable $e) {
+            $this->rollBackIfStarted($startedTransaction);
+
+            throw $e;
+        }
+    }
+
+    /** UPDATE is guarded by status='dispatching' so a row a sweep already reclaimed is not overwritten. */
+    #[Override]
+    public function markFailedPermanently(string $eventId, string $listener, Throwable $lastError): void
+    {
+        $this->connection->prepare(
+            <<<SQL
+            UPDATE event_outbox_redelivery
+                SET status = :new_status,
+                    last_error = :last_error,
+                    updated_at = :updated_at
+                WHERE event_id = :event_id
+                  AND listener = :listener
+                  AND status = :current_status
+            SQL,
+        )->execute([
+            'new_status' => RedeliveryStatus::Failed->value,
+            'current_status' => RedeliveryStatus::Dispatching->value,
+            'last_error' => self::formatError($lastError),
+            'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
+            'event_id' => $eventId,
+            'listener' => $listener,
+        ]);
+    }
+
+    /** UPDATE is guarded by status='dispatching' so a row a sweep already reclaimed is not overwritten. */
+    #[Override]
+    public function markSucceeded(string $eventId, string $listener): void
+    {
+        $this->connection->prepare(
+            <<<SQL
+            UPDATE event_outbox_redelivery
+                SET status = :new_status,
+                    updated_at = :updated_at
+                WHERE event_id = :event_id
+                  AND listener = :listener
+                  AND status = :current_status
+            SQL,
+        )->execute([
+            'new_status' => RedeliveryStatus::Succeeded->value,
+            'current_status' => RedeliveryStatus::Dispatching->value,
+            'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
+            'event_id' => $eventId,
+            'listener' => $listener,
+        ]);
+    }
+
+    #[Override]
+    public function retryNow(string $eventId, string $listener): void
+    {
+        $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');
+
+        $this->connection->prepare(
+            <<<SQL
+            UPDATE event_outbox_redelivery
+                SET status = :status,
+                    next_retry_at = :next_retry_at,
+                    updated_at = :updated_at
+                WHERE event_id = :event_id AND listener = :listener
+            SQL,
+        )->execute([
+            'status' => RedeliveryStatus::PendingRetry->value,
+            'next_retry_at' => $now,
+            'updated_at' => $now,
+            'event_id' => $eventId,
+            'listener' => $listener,
+        ]);
+    }
+
+    /**
+     * Reset redelivery rows wedged in `dispatching` back to `pending_retry`. A row is "stuck"
+     * when its updated_at is older than $olderThan. Returns the number of rows recovered.
+     * Call from a separate scheduled job; safe to run alongside the redelivery worker.
+     */
+    public function recoverStuckRedeliveries(CarbonInterval $olderThan): int
+    {
+        $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');
+        $thresholdAt = CarbonImmutable::now()->sub($olderThan)->format('Y-m-d H:i:s.u');
+
+        $stmt = $this->connection->prepare(
+            <<<SQL
+            UPDATE event_outbox_redelivery
+                SET status = :pending,
+                    updated_at = :now
+                WHERE status = :dispatching
+                  AND updated_at < :threshold
+            SQL,
+        );
+        $stmt->execute([
+            'pending' => RedeliveryStatus::PendingRetry->value,
+            'dispatching' => RedeliveryStatus::Dispatching->value,
+            'now' => $now,
+            'threshold' => $thresholdAt,
+        ]);
+
+        return $stmt->rowCount();
+    }
+
+    /**
+     * @return array{event_id: string, listener: string, attempt_number: int, event_name: string, event_status: string, event_payload: string, event_created_at: string, event_publish_at: string}|null
+     */
+    private function fetchNextDueRow(): ?array
     {
         $lockClause = $this->lockingClause();
 
@@ -101,107 +254,7 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         /** @var array{event_id: string, listener: string, attempt_number: int, event_name: string, event_status: string, event_payload: string, event_created_at: string, event_publish_at: string}|false $row */
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($row === false) {
-            return null;
-        }
-
-        /** @var array<string, mixed> $payload */
-        $payload = json_decode($row['event_payload'], true, flags: JSON_THROW_ON_ERROR);
-
-        $event = RawEvent::retrieve(
-            id: $row['event_id'],
-            name: $row['event_name'],
-            status: RawEventStatus::from($row['event_status']),
-            payload: $payload,
-            createdAt: new CarbonImmutable($row['event_created_at']),
-            publishAt: new CarbonImmutable($row['event_publish_at']),
-        );
-
-        return new DueRedelivery(
-            event: $event,
-            listener: $row['listener'],
-            attemptNumber: (int) $row['attempt_number'],
-        );
-    }
-
-    #[Override]
-    public function markFailedPermanently(string $eventId, string $listener, Throwable $lastError): void
-    {
-        $this->connection->prepare(
-            <<<SQL
-            UPDATE event_outbox_redelivery
-                SET status = :status,
-                    last_error = :last_error,
-                    updated_at = :updated_at
-                WHERE event_id = :event_id AND listener = :listener
-            SQL,
-        )->execute([
-            'status' => RedeliveryStatus::Failed->value,
-            'last_error' => self::formatError($lastError),
-            'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
-            'event_id' => $eventId,
-            'listener' => $listener,
-        ]);
-    }
-
-    #[Override]
-    public function markSucceeded(string $eventId, string $listener): void
-    {
-        $this->connection->prepare(
-            <<<SQL
-            UPDATE event_outbox_redelivery
-                SET status = :status,
-                    updated_at = :updated_at
-                WHERE event_id = :event_id AND listener = :listener
-            SQL,
-        )->execute([
-            'status' => RedeliveryStatus::Succeeded->value,
-            'updated_at' => CarbonImmutable::now()->format('Y-m-d H:i:s.u'),
-            'event_id' => $eventId,
-            'listener' => $listener,
-        ]);
-    }
-
-    #[Override]
-    public function processNextDue(callable $handler): void
-    {
-        $startedTransaction = $this->beginTransactionIfNeeded();
-
-        try {
-            $due = $this->nextDue();
-
-            if ($due !== null) {
-                $handler($due);
-            }
-
-            $this->commitIfStarted($startedTransaction);
-        } catch (Throwable $e) {
-            $this->rollBackIfStarted($startedTransaction);
-
-            throw $e;
-        }
-    }
-
-    #[Override]
-    public function retryNow(string $eventId, string $listener): void
-    {
-        $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');
-
-        $this->connection->prepare(
-            <<<SQL
-            UPDATE event_outbox_redelivery
-                SET status = :status,
-                    next_retry_at = :next_retry_at,
-                    updated_at = :updated_at
-                WHERE event_id = :event_id AND listener = :listener
-            SQL,
-        )->execute([
-            'status' => RedeliveryStatus::PendingRetry->value,
-            'next_retry_at' => $now,
-            'updated_at' => $now,
-            'event_id' => $eventId,
-            'listener' => $listener,
-        ]);
+        return $row === false ? null : $row;
     }
 
     private static function formatError(Throwable $error): string

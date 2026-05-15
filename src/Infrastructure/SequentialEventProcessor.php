@@ -14,7 +14,7 @@ use Vesper\Tool\Event\HandlerResolver;
 use Vesper\Tool\Event\Infrastructure\Retry\NoRetryPolicy;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RedeliveryRequest;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SequentialEventProcessor implements EventProcessor
@@ -28,7 +28,7 @@ class SequentialEventProcessor implements EventProcessor
         private readonly HandlerResolver $resolver = new DefaultHandlerResolver(),
         private readonly EventHydrator $hydrator = new JacksonHydrator(),
         private readonly RetryPolicy $retryPolicy = new NoRetryPolicy(),
-        private readonly ?RedeliveryTracker $redeliveryTracker = null,
+        private readonly ?RedeliveryStore $redeliveryStore = null,
         private readonly array $ignoredExceptions = [],
     ) {
     }
@@ -43,40 +43,30 @@ class SequentialEventProcessor implements EventProcessor
         }
     }
 
-    /**
-     * Dispatch's fail-fast throw is deferred until processNextDue() has committed, so the
-     * schedule / markFailedPermanently side effects persist instead of getting rolled back.
-     */
     public function processNextRedelivery(): void
     {
-        if ($this->redeliveryTracker === null) {
+        if ($this->redeliveryStore === null) {
             return;
         }
 
-        $deferredException = null;
+        $due = $this->redeliveryStore->next();
 
-        $this->redeliveryTracker->processNextDue(function ($due) use (&$deferredException): void {
-            $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
-
-            if ($subscriber === null) {
-                $this->redeliveryTracker->markFailedPermanently(
-                    $due->event->id,
-                    $due->listener,
-                    new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
-                );
-                return;
-            }
-
-            try {
-                $this->dispatch($due->event, $subscriber, $due->attemptNumber);
-            } catch (Throwable $e) {
-                $deferredException = $e;
-            }
-        });
-
-        if ($deferredException !== null) {
-            throw $deferredException;
+        if ($due === null) {
+            return;
         }
+
+        $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
+
+        if ($subscriber === null) {
+            $this->redeliveryStore->markFailedPermanently(
+                $due->event->id,
+                $due->listener,
+                new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
+            );
+            return;
+        }
+
+        $this->dispatch($due->event, $subscriber, $due->attemptNumber);
     }
 
     private function findRegisteredSubscriber(string $eventName, string $listenerKey): callable|string|null
@@ -98,7 +88,7 @@ class SequentialEventProcessor implements EventProcessor
 
         try {
             $callable($domainEvent);
-            $this->redeliveryTracker?->markSucceeded($event->id, $listener);
+            $this->redeliveryStore?->markSucceeded($event->id, $listener);
         } catch (Throwable $e) {
             if ($this->isIgnored($e)) {
                 return;
@@ -112,11 +102,11 @@ class SequentialEventProcessor implements EventProcessor
                 throw $e;
             }
 
-            if ($this->redeliveryTracker === null) {
+            if ($this->redeliveryStore === null) {
                 throw $e;
             }
 
-            $this->redeliveryTracker->schedule(new RedeliveryRequest(
+            $this->redeliveryStore->schedule(new RedeliveryRequest(
                 event: $event,
                 listener: $listener,
                 attemptNumber: $attemptsMade,
@@ -129,7 +119,7 @@ class SequentialEventProcessor implements EventProcessor
     /** Hook for subclasses; called once a listener's failure can no longer be retried. */
     protected function onPermanentFailure(RawEvent $event, callable|string $subscriber, Throwable $error): void
     {
-        $this->redeliveryTracker?->markFailedPermanently($event->id, $this->listenerKey($subscriber), $error);
+        $this->redeliveryStore?->markFailedPermanently($event->id, $this->listenerKey($subscriber), $error);
     }
 
     protected function listenerKey(callable|string $subscriber): string

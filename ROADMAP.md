@@ -40,7 +40,7 @@ and there's no dashboard.
 
 ### Stack trace in `last_error`
 
-`SqlRedeliveryTracker` records the failed dispatch's error as
+`SqlRedeliveryStore` records the failed dispatch's error as
 `ExceptionClass: message`. Useful for inspection but loses the throw site.
 For permanent failures discovered weeks later, the missing context bites.
 

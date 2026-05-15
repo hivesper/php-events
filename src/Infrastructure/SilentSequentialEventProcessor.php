@@ -10,7 +10,7 @@ use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\HandlerResolver;
 use Vesper\Tool\Event\Infrastructure\Retry\NoRetryPolicy;
 use Vesper\Tool\Event\RawEvent;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SilentSequentialEventProcessor extends SequentialEventProcessor
@@ -25,7 +25,7 @@ class SilentSequentialEventProcessor extends SequentialEventProcessor
         HandlerResolver $resolver = new DefaultHandlerResolver(),
         EventHydrator $hydrator = new JacksonHydrator(),
         RetryPolicy $retryPolicy = new NoRetryPolicy(),
-        ?RedeliveryTracker $redeliveryTracker = null,
+        ?RedeliveryStore $redeliveryStore = null,
         array $ignoredExceptions = [],
     ) {
         parent::__construct(
@@ -33,7 +33,7 @@ class SilentSequentialEventProcessor extends SequentialEventProcessor
             resolver: $resolver,
             hydrator: $hydrator,
             retryPolicy: $retryPolicy,
-            redeliveryTracker: $redeliveryTracker,
+            redeliveryStore: $redeliveryStore,
             ignoredExceptions: $ignoredExceptions,
         );
     }

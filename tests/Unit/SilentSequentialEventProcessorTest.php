@@ -12,10 +12,10 @@ use Test\Vesper\Tool\Event\_Fixtures\ThrowingListener;
 use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
-use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryTracker;
+use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryStore;
 use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
 use Vesper\Tool\Event\RedeliveryRequest;
-use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\RedeliveryStore;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SilentSequentialEventProcessorTest extends TestCase
@@ -194,11 +194,11 @@ class SilentSequentialEventProcessorTest extends TestCase
             throw $exception;
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->once())
             ->method('markFailedPermanently')
             ->with($event->id, 'Closure', $exception);
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $this->logger->expects($this->once())
             ->method('error')
@@ -220,7 +220,7 @@ class SilentSequentialEventProcessorTest extends TestCase
             subscribers: $this->subscribers,
             logger: $this->logger,
             hydrator: $hydrator,
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         $processor->process($this->store);
@@ -234,11 +234,11 @@ class SilentSequentialEventProcessorTest extends TestCase
             throw new IgnorableExceptionStub('expected domain failure');
         });
 
-        $tracker = $this->createMock(RedeliveryTracker::class);
+        $tracker = $this->createMock(RedeliveryStore::class);
         $tracker->expects($this->never())->method('schedule');
         $tracker->expects($this->never())->method('markFailedPermanently');
         $tracker->expects($this->never())->method('markSucceeded');
-        $tracker->method('nextDue')->willReturn(null);
+        $tracker->method('next')->willReturn(null);
 
         $this->logger->expects($this->never())->method('error');
 
@@ -249,7 +249,7 @@ class SilentSequentialEventProcessorTest extends TestCase
             subscribers: $this->subscribers,
             logger: $this->logger,
             hydrator: $hydrator,
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
             ignoredExceptions: [IgnorableExceptionStub::class],
         );
 
@@ -261,7 +261,7 @@ class SilentSequentialEventProcessorTest extends TestCase
     public function test_process_next_redelivery_logs_and_marks_failed_permanently_on_exhaustion(): void
     {
         $event = TestEventFactory::retrieveOrderPlaced();
-        $tracker = new InMemoryRedeliveryTracker();
+        $tracker = new InMemoryRedeliveryStore();
         $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
@@ -296,18 +296,18 @@ class SilentSequentialEventProcessorTest extends TestCase
             logger: $this->logger,
             hydrator: $hydrator,
             retryPolicy: self::policyExhaustedImmediately(),
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         $processor->processNextRedelivery();
 
-        self::assertNull($tracker->nextDue(), 'row marked failed permanently — no longer due');
+        self::assertNull($tracker->next(), 'row marked failed permanently — no longer due');
     }
 
     public function test_process_next_redelivery_silently_reschedules_when_retries_remain(): void
     {
         $event = TestEventFactory::retrieveOrderPlaced();
-        $tracker = new InMemoryRedeliveryTracker();
+        $tracker = new InMemoryRedeliveryStore();
         $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
@@ -330,12 +330,12 @@ class SilentSequentialEventProcessorTest extends TestCase
             logger: $this->logger,
             hydrator: $hydrator,
             retryPolicy: self::policyReturningFutureRetry(),
-            redeliveryTracker: $tracker,
+            redeliveryStore: $tracker,
         );
 
         $processor->processNextRedelivery();
 
-        self::assertNull($tracker->nextDue(), 'row rescheduled for the future — not due now');
+        self::assertNull($tracker->next(), 'row rescheduled for the future — not due now');
     }
 
     private static function policyExhaustedImmediately(): RetryPolicy

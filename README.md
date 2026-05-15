@@ -14,12 +14,12 @@ Events are first written to a durable store (in-memory or SQL), then dispatched 
 - **Two stores out of the box** — in-memory for tests/dev, SQL (MySQL / SQLite) for production
 - **Two processors out of the box** — standard (fail-fast for local/CI) and silent (log-and-continue for production)
 - **Outbox pattern** — events transition `pending → processing → processed`, with the intermediate state surviving worker crashes
-- **Per-listener retries** — configurable `RetryPolicy` plus a persisted `RedeliveryTracker`; a single failing listener of an event is retried independently while the others continue
+- **Per-listener retries** — configurable `RetryPolicy` plus a persisted `RedeliveryStore`; a single failing listener of an event is retried independently while the others continue
 - **Ignored exceptions** — pass a list of `Throwable` classes to silently swallow expected domain failures (no retry, no log, no DB row)
 - **Status audit trail** — every event status transition is recorded in `event_outbox_status` for ops visibility
 - **Scheduled delivery** — set `publishAt` in the future; the processor only picks up events whose time has come
 - **Worker-safe** — MySQL store uses `FOR UPDATE SKIP LOCKED` to allow multiple workers without double-processing
-- **Auto schema** — `SqlEventStore` and `SqlRedeliveryTracker` each create their own tables on first boot, no migrations needed
+- **Auto schema** — `SqlEventStore` and `SqlRedeliveryStore` each create their own tables on first boot, no migrations needed
 - **Clean architecture boundaries** — `EventSerializer` and `EventHydrator` keep `RawEvent` out of your application layer
 
 ---
@@ -64,8 +64,8 @@ composer require hivesper/php-events
 | `RetryPolicy` | Interface — decides whether and when to retry a failed listener |
 | `NoRetryPolicy` | Default — never retries |
 | `ExponentialBackoffRetryPolicy` | Built-in — five attempts with `100ms / 500ms / 1min / 5min` backoff |
-| `RedeliveryTracker` | Interface — persists per-(event, listener) retry state and exposes `retryNow()` for admin tooling |
-| `InMemoryRedeliveryTracker` / `SqlRedeliveryTracker` | Tracker implementations |
+| `RedeliveryStore` | Interface — persists per-(event, listener) retry state and exposes `retryNow()` for admin tooling |
+| `InMemoryRedeliveryStore` / `SqlRedeliveryStore` | Tracker implementations |
 
 ---
 
@@ -118,31 +118,31 @@ $processor->process($store);
 
 ## Scheduled jobs
 
-A production deployment runs three scheduled jobs against this library. They touch
+A production deployment runs four scheduled jobs against this library. They touch
 mostly-disjoint tables and rows, so they can run in parallel without contending.
 
 | Job | Recommended cadence | What it does |
 |---|---|---|
-| `$processor->process($store)` | Every minute, or on demand after a business write | Drains all currently-pending events from `event_outbox` and dispatches each to its listeners. Loops internally until empty. See [Running your own processor](#running-your-own-processor). |
-| `$processor->processNextRedelivery()` | Every minute, looped per tick to drain a batch | Picks up one due retry from `event_outbox_redelivery` and dispatches it. Loop the call within a single tick if you want to drain multiple. See [Automatic retry & failure tracking](#automatic-retry--failure-tracking). |
-| `$store->recoverStuckEvents(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox` rows wedged in `processing` (worker crash victims) back to `pending`. Threshold should be comfortably longer than your longest healthy dispatch — see [Recovering stuck events](#recovering-stuck-events). |
+| `$processor->process($eventStore)` | Every minute, or on demand after a business write | Drains all currently-pending events from `event_outbox` and dispatches each to its listeners. Loops internally until empty. See [Running your own processor](#running-your-own-processor). |
+| `$processor->processNextRedelivery()` | Every minute, looped per tick to drain a batch | Claims one due retry from `event_outbox_redelivery` (transitions it to `dispatching`) and dispatches it. Loop the call within a single tick if you want to drain multiple. See [Automatic retry & failure tracking](#automatic-retry--failure-tracking). |
+| `$eventStore->recoverStuckEvents(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox` rows wedged in `processing` (worker crash victims) back to `pending`. Threshold should be comfortably longer than your longest healthy dispatch — see [Recovering stuck events](#recovering-stuck-events). |
+| `$redeliveryStore->recoverStuckRedeliveries(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox_redelivery` rows wedged in `dispatching` (worker crash victims) back to `pending_retry`. Same threshold guidance as above. |
 
-Only `recoverStuckEvents` is SQL-specific (lives on `SqlEventStore`). The other two
-work against any `EventStore` / `RedeliveryTracker` implementation.
+`recoverStuckEvents` and `recoverStuckRedeliveries` are SQL-specific (live on `SqlEventStore` /
+`SqlRedeliveryStore`). The other two work against any `EventStore` / `RedeliveryStore` implementation.
 
-The three jobs do not compete for the same rows:
+The four jobs do not compete for the same rows:
 
-- `process()` reads `event_outbox` rows in `pending` status; `recoverStuckEvents()` reads
-  rows in `processing` status — disjoint by the status filter.
-- `processNextRedelivery()` reads the redelivery table, not the outbox.
-- The lock from `SELECT ... FOR UPDATE SKIP LOCKED` is held through each job's transaction,
-  so concurrent workers running the same job never claim the same row either.
+- `process()` reads `event_outbox` rows in `pending`; `recoverStuckEvents()` reads rows in `processing` — disjoint by status filter.
+- `processNextRedelivery()` reads `event_outbox_redelivery` rows in `pending_retry` and claims by transitioning to `dispatching`; `recoverStuckRedeliveries()` reads rows in `dispatching` — disjoint by status filter.
+- The redelivery and event tables are separate.
+- The lock from `SELECT ... FOR UPDATE SKIP LOCKED` is held through each claim, so concurrent workers running the same job never claim the same row either.
 
-The one cross-job interaction to think about: if `recoverStuckEvents` flips a row from
-`processing` back to `pending` while a slow worker is still actively dispatching it,
-another worker can pick it up via `process()` and re-fire its listeners. Choose a
-threshold comfortably longer than your longest healthy dispatch, and make sure
-listeners are idempotent (the at-least-once outbox contract requires that anyway).
+The one cross-job interaction to think about: if a `recoverStuck*` sweeper resets a row while a
+slow worker is still actively dispatching it, another worker can pick it up on the next tick
+and re-fire its listener. Choose thresholds comfortably longer than your longest healthy
+dispatch, and make sure listeners are idempotent (the at-least-once outbox contract requires
+that anyway).
 
 ---
 
@@ -362,7 +362,7 @@ CREATE TABLE event_outbox_status (
 > MySQL workers use `SELECT … FOR UPDATE SKIP LOCKED` on the `event_outbox` table for safe
 > concurrent processing.
 
-If you wire up a `RedeliveryTracker` (see [Automatic retry & failure tracking](#automatic-retry--failure-tracking)),
+If you wire up a `RedeliveryStore` (see [Automatic retry & failure tracking](#automatic-retry--failure-tracking)),
 a third table `event_outbox_redelivery` is created on demand for per-listener retry state.
 
 ### Event lifecycle
@@ -405,6 +405,19 @@ unnecessary work is unnecessary work.
 
 > Re-dispatch can re-fire listeners that already succeeded on the previous run. Listeners must
 > be idempotent for the recovery path to be safe.
+
+### Recovering stuck redeliveries
+
+The same shape applies to the redelivery table:
+`SqlRedeliveryStore::recoverStuckRedeliveries(CarbonInterval $olderThan): int` resets rows
+wedged in `dispatching` back to `pending_retry` so a worker can claim them again on the next
+`processNextRedelivery()` tick. A row is "stuck" when its `updated_at` is older than `$olderThan`.
+
+```php
+$recovered = $redeliveryStore->recoverStuckRedeliveries(CarbonInterval::minutes(30));
+```
+
+Same threshold guidance and same idempotency requirement as `recoverStuckEvents`.
 
 ---
 
@@ -615,25 +628,25 @@ $retryPolicy = new ExponentialBackoffRetryPolicy();
 $retryPolicy = new ExponentialBackoffRetryPolicy(delaysMs: [50, 250, 1_000, 30_000]);
 ```
 
-Retries require a `RedeliveryTracker` to be configured — without one, any failure is treated
+Retries require a `RedeliveryStore` to be configured — without one, any failure is treated
 as permanent and rethrown by `SequentialEventProcessor` (or logged and swallowed by
 `SilentSequentialEventProcessor`).
 
 ### Redelivery tracker
 
-The `RedeliveryTracker` interface owns per-listener retry state — when an attempt failed, how
+The `RedeliveryStore` interface owns per-listener retry state — when an attempt failed, how
 many attempts have been made, when the next one should run, what the last error was. Two
 implementations:
 
-- **`InMemoryRedeliveryTracker`** — array-backed, for tests and dev.
-- **`SqlRedeliveryTracker`** — durable, MySQL/SQLite-compatible. Auto-creates its
+- **`InMemoryRedeliveryStore`** — array-backed, for tests and dev.
+- **`SqlRedeliveryStore`** — durable, MySQL/SQLite-compatible. Auto-creates its
   `event_outbox_redelivery` table on first construction. Worker-safe via `FOR UPDATE SKIP LOCKED`
   on MySQL.
 
 ```php
-use Vesper\Tool\Event\Infrastructure\SqlRedeliveryTracker;
+use Vesper\Tool\Event\Infrastructure\SqlRedeliveryStore;
 
-$tracker = new SqlRedeliveryTracker($pdo); // schema created here if not present
+$tracker = new SqlRedeliveryStore($pdo); // schema created here if not present
 ```
 
 ### Wiring a processor with retries
@@ -641,13 +654,13 @@ $tracker = new SqlRedeliveryTracker($pdo); // schema created here if not present
 ```php
 use Vesper\Tool\Event\Infrastructure\Retry\ExponentialBackoffRetryPolicy;
 use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
-use Vesper\Tool\Event\Infrastructure\SqlRedeliveryTracker;
+use Vesper\Tool\Event\Infrastructure\SqlRedeliveryStore;
 
 $processor = new SilentSequentialEventProcessor(
     subscribers:        $subscribers,
     logger:             $logger,
     retryPolicy:        new ExponentialBackoffRetryPolicy(),
-    redeliveryTracker:  new SqlRedeliveryTracker($pdo),
+    redeliveryStore:  new SqlRedeliveryStore($pdo),
     ignoredExceptions:  [
         UserNotFoundException::class,
         InvalidPayloadException::class,
@@ -706,7 +719,7 @@ differs slightly between processors:
 
 ### Re-triggering a failed dispatch
 
-`RedeliveryTracker::retryNow($eventId, $listener)` re-queues a dispatch for immediate retry,
+`RedeliveryStore::retryNow($eventId, $listener)` re-queues a dispatch for immediate retry,
 regardless of its current status (including `failed`). The attempt count is preserved — the
 retry policy's max-attempts ceiling still applies on subsequent automatic failures. The library
 ships no CLI; wire `retryNow()` into whatever admin surface you prefer (admin UI, Slack
