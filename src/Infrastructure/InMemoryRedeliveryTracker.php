@@ -7,6 +7,7 @@ use Override;
 use Throwable;
 use Vesper\Tool\Event\DueRedelivery;
 use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryTracker;
 
 class InMemoryRedeliveryTracker implements RedeliveryTracker
@@ -15,23 +16,18 @@ class InMemoryRedeliveryTracker implements RedeliveryTracker
     private array $rows = [];
 
     #[Override]
-    public function schedule(
-        RawEvent $event,
-        string $listener,
-        int $attemptNumber,
-        CarbonImmutable $nextRetryAt,
-        Throwable $lastError,
-    ): void {
-        $key = self::key($event->id, $listener);
+    public function schedule(RedeliveryRequest $request): void
+    {
+        $key = self::key($request->event->id, $request->listener);
         $now = CarbonImmutable::now();
 
         $this->rows[$key] = [
-            'event' => $event,
-            'listener' => $listener,
+            'event' => $request->event,
+            'listener' => $request->listener,
             'status' => RedeliveryStatus::PendingRetry,
-            'attempt_number' => $attemptNumber,
-            'next_retry_at' => $nextRetryAt,
-            'last_error' => self::formatError($lastError),
+            'attempt_number' => $request->attemptNumber,
+            'next_retry_at' => $request->nextRetryAt,
+            'last_error' => self::formatError($request->lastError),
             'created_at' => $this->rows[$key]['created_at'] ?? $now,
             'updated_at' => $now,
         ];

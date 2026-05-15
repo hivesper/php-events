@@ -13,6 +13,7 @@ use Vesper\Tool\Event\Infrastructure\Schema\MysqlRedeliverySchema;
 use Vesper\Tool\Event\Infrastructure\Schema\SqliteRedeliverySchema;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
+use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryTracker;
 
 readonly class SqlRedeliveryTracker implements RedeliveryTracker
@@ -23,16 +24,11 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
     }
 
     #[Override]
-    public function schedule(
-        RawEvent $event,
-        string $listener,
-        int $attemptNumber,
-        CarbonImmutable $nextRetryAt,
-        Throwable $lastError,
-    ): void {
+    public function schedule(RedeliveryRequest $request): void
+    {
         $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');
-        $errorMessage = self::formatError($lastError);
-        $nextRetryAtSql = $nextRetryAt->format('Y-m-d H:i:s.u');
+        $errorMessage = self::formatError($request->lastError);
+        $nextRetryAtSql = $request->nextRetryAt->format('Y-m-d H:i:s.u');
 
         $sql = match ($this->driverName()) {
             'mysql' => <<<SQL
@@ -61,10 +57,10 @@ readonly class SqlRedeliveryTracker implements RedeliveryTracker
         };
 
         $this->connection->prepare($sql)->execute([
-            'event_id' => $event->id,
-            'listener' => $listener,
+            'event_id' => $request->event->id,
+            'listener' => $request->listener,
             'status' => RedeliveryStatus::PendingRetry->value,
-            'attempt_number' => $attemptNumber,
+            'attempt_number' => $request->attemptNumber,
             'next_retry_at' => $nextRetryAtSql,
             'last_error' => $errorMessage,
             'created_at' => $now,

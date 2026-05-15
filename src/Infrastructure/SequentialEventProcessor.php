@@ -13,6 +13,7 @@ use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\HandlerResolver;
 use Vesper\Tool\Event\Infrastructure\Retry\NoRetryPolicy;
 use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryTracker;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
@@ -122,7 +123,13 @@ class SequentialEventProcessor implements EventProcessor
                 throw $e;
             }
 
-            $this->redeliveryTracker->schedule($event, $listener, $attemptsMade, $nextRetryAt, $e);
+            $this->redeliveryTracker->schedule(new RedeliveryRequest(
+                event: $event,
+                listener: $listener,
+                attemptNumber: $attemptsMade,
+                nextRetryAt: $nextRetryAt,
+                lastError: $e,
+            ));
         }
     }
 

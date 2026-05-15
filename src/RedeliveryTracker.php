@@ -2,7 +2,6 @@
 
 namespace Vesper\Tool\Event;
 
-use Carbon\CarbonImmutable;
 use Throwable;
 
 interface RedeliveryTracker
@@ -11,18 +10,12 @@ interface RedeliveryTracker
      * Persist a failed dispatch so it can be retried later.
      *
      * Idempotent on (event id, listener): scheduling again updates the existing
-     * row's attempt_number, next_retry_at, and last_error. The full RawEvent is
-     * passed (not just the id) so in-memory implementations can keep their own
-     * copy for later rehydration; SQL implementations only need event->id and
-     * join event_outbox to look the rest up.
+     * row's attempt_number, next_retry_at, and last_error. The request carries
+     * the full RawEvent (not just the id) so in-memory implementations can keep
+     * their own copy for later rehydration; SQL implementations only need the
+     * event id and join event_outbox to look the rest up.
      */
-    public function schedule(
-        RawEvent $event,
-        string $listener,
-        int $attemptNumber,
-        CarbonImmutable $nextRetryAt,
-        Throwable $lastError,
-    ): void;
+    public function schedule(RedeliveryRequest $request): void;
 
     /**
      * Pick up the next due redelivery (worker-safe; locks the row on MySQL).

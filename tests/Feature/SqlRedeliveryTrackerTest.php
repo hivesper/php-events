@@ -10,6 +10,7 @@ use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 use Vesper\Tool\Event\Infrastructure\SqlRedeliveryTracker;
 use Vesper\Tool\Event\RawEvent;
+use Vesper\Tool\Event\RedeliveryRequest;
 
 class SqlRedeliveryTrackerTest extends TestCase
 {
@@ -43,13 +44,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         $due = $this->tracker->nextDue();
 
@@ -64,13 +65,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->addMinute(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         self::assertNull($this->tracker->nextDue());
     }
@@ -79,20 +80,20 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->addMinute(),
             lastError: new RuntimeException('first'),
-        );
-        $this->tracker->schedule(
+        ));
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 2,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('second'),
-        );
+        ));
 
         $due = $this->tracker->nextDue();
 
@@ -107,13 +108,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         $this->tracker->markSucceeded($event->id, 'App\\Listener');
 
@@ -125,13 +126,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 5,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         $this->tracker->markFailedPermanently($event->id, 'App\\Listener', new RuntimeException('final'));
 
@@ -142,13 +143,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     public function test_process_next_due_runs_handler_inside_a_transaction(): void
     {
         $event = $this->insertEvent();
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         $observedInTransaction = null;
 
@@ -163,13 +164,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     public function test_process_next_due_commits_handler_side_effects(): void
     {
         $event = $this->insertEvent();
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 5,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         $this->tracker->processNextDue(function () use ($event): void {
             $this->tracker->markFailedPermanently(
@@ -186,13 +187,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     public function test_process_next_due_rolls_back_when_handler_throws(): void
     {
         $event = $this->insertEvent();
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
 
         try {
             $this->tracker->processNextDue(function () use ($event): void {
@@ -228,13 +229,13 @@ class SqlRedeliveryTrackerTest extends TestCase
     {
         $event = $this->insertEvent();
 
-        $this->tracker->schedule(
+        $this->tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'App\\Listener',
             attemptNumber: 5,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
-        );
+        ));
         $this->tracker->markFailedPermanently($event->id, 'App\\Listener', new RuntimeException('final'));
 
         $this->tracker->retryNow($event->id, 'App\\Listener');

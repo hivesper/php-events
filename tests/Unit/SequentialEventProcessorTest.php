@@ -15,6 +15,7 @@ use Vesper\Tool\Event\HandlerResolver;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
 use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryTracker;
 use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
+use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryTracker;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
@@ -254,13 +255,13 @@ class SequentialEventProcessorTest extends TestCase
         $tracker = $this->createMock(RedeliveryTracker::class);
         $tracker->expects($this->once())
             ->method('schedule')
-            ->with(
-                $this->callback(fn($e) => $e->id === $event->id),
-                'Closure',
-                1,
-                $this->isInstanceOf(CarbonImmutable::class),
-                $exception,
-            );
+            ->with($this->callback(
+                fn(RedeliveryRequest $r): bool =>
+                    $r->event->id === $event->id
+                    && $r->listener === 'Closure'
+                    && $r->attemptNumber === 1
+                    && $r->lastError === $exception,
+            ));
         $tracker->method('nextDue')->willReturn(null);
 
         $processor = new SequentialEventProcessor(
@@ -363,13 +364,13 @@ class SequentialEventProcessorTest extends TestCase
         $event = TestEventFactory::retrieveOrderPlaced();
 
         $tracker = new InMemoryRedeliveryTracker();
-        $tracker->schedule(
+        $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
             attemptNumber: 2,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('earlier failure'),
-        );
+        ));
 
         $received = null;
         $this->subscribers->subscribe('order.placed', function (object $e) use (&$received) {

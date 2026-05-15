@@ -14,6 +14,7 @@ use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
 use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryTracker;
 use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
+use Vesper\Tool\Event\RedeliveryRequest;
 use Vesper\Tool\Event\RedeliveryTracker;
 use Vesper\Tool\Event\Retry\RetryPolicy;
 
@@ -261,13 +262,13 @@ class SilentSequentialEventProcessorTest extends TestCase
     {
         $event = TestEventFactory::retrieveOrderPlaced();
         $tracker = new InMemoryRedeliveryTracker();
-        $tracker->schedule(
+        $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('previous failure'),
-        );
+        ));
 
         $exception = new RuntimeException('still broken');
         $this->subscribers->subscribe('order.placed', function () use ($exception) {
@@ -307,13 +308,13 @@ class SilentSequentialEventProcessorTest extends TestCase
     {
         $event = TestEventFactory::retrieveOrderPlaced();
         $tracker = new InMemoryRedeliveryTracker();
-        $tracker->schedule(
+        $tracker->schedule(new RedeliveryRequest(
             event: $event,
             listener: 'Closure',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('previous failure'),
-        );
+        ));
 
         $this->subscribers->subscribe('order.placed', function () {
             throw new RuntimeException('still broken');
