@@ -2,6 +2,7 @@
 
 namespace Test\Vesper\Tool\Event\Unit;
 
+use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
@@ -11,8 +12,10 @@ use Test\Vesper\Tool\Event\_Fixtures\ThrowingListener;
 use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
+use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryTracker;
 use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
 use Vesper\Tool\Event\RedeliveryTracker;
+use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SilentSequentialEventProcessorTest extends TestCase
 {
@@ -245,5 +248,106 @@ class SilentSequentialEventProcessorTest extends TestCase
         );
 
         $processor->process($this->store);
+    }
+
+    // ── processNextRedelivery silent behaviour ─────────────────────────────────
+
+    public function test_process_next_redelivery_logs_and_marks_failed_permanently_on_exhaustion(): void
+    {
+        $event = TestEventFactory::retrieveOrderPlaced();
+        $tracker = new InMemoryRedeliveryTracker();
+        $tracker->schedule(
+            event: $event,
+            listener: 'Closure',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('previous failure'),
+        );
+
+        $exception = new RuntimeException('still broken');
+        $this->subscribers->subscribe('order.placed', function () use ($exception) {
+            throw $exception;
+        });
+
+        $this->logger->expects($this->once())
+            ->method('error')
+            ->with(
+                'Failed to dispatch event to listener.',
+                [
+                    'event'     => 'order.placed',
+                    'event_id'  => $event->id,
+                    'listener'  => 'Closure',
+                    'exception' => $exception,
+                ],
+            );
+
+        $hydrator = $this->createStub(EventHydrator::class);
+        $hydrator->method('hydrate')->willReturnCallback(fn(string $name, array $payload) => (object) $payload);
+
+        $processor = new SilentSequentialEventProcessor(
+            subscribers: $this->subscribers,
+            logger: $this->logger,
+            hydrator: $hydrator,
+            retryPolicy: self::policyExhaustedImmediately(),
+            redeliveryTracker: $tracker,
+        );
+
+        $processor->processNextRedelivery();
+
+        self::assertNull($tracker->nextDue(), 'row marked failed permanently — no longer due');
+    }
+
+    public function test_process_next_redelivery_silently_reschedules_when_retries_remain(): void
+    {
+        $event = TestEventFactory::retrieveOrderPlaced();
+        $tracker = new InMemoryRedeliveryTracker();
+        $tracker->schedule(
+            event: $event,
+            listener: 'Closure',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('previous failure'),
+        );
+
+        $this->subscribers->subscribe('order.placed', function () {
+            throw new RuntimeException('still broken');
+        });
+
+        $this->logger->expects($this->never())->method('error');
+
+        $hydrator = $this->createStub(EventHydrator::class);
+        $hydrator->method('hydrate')->willReturnCallback(fn(string $name, array $payload) => (object) $payload);
+
+        $processor = new SilentSequentialEventProcessor(
+            subscribers: $this->subscribers,
+            logger: $this->logger,
+            hydrator: $hydrator,
+            retryPolicy: self::policyReturningFutureRetry(),
+            redeliveryTracker: $tracker,
+        );
+
+        $processor->processNextRedelivery();
+
+        self::assertNull($tracker->nextDue(), 'row rescheduled for the future — not due now');
+    }
+
+    private static function policyExhaustedImmediately(): RetryPolicy
+    {
+        return new readonly class implements RetryPolicy {
+            public function nextRetryAt(int $previousAttempt): ?CarbonImmutable
+            {
+                return null;
+            }
+        };
+    }
+
+    private static function policyReturningFutureRetry(): RetryPolicy
+    {
+        return new readonly class implements RetryPolicy {
+            public function nextRetryAt(int $previousAttempt): ?CarbonImmutable
+            {
+                return CarbonImmutable::now()->addMinute();
+            }
+        };
     }
 }
