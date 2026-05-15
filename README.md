@@ -348,8 +348,33 @@ The processor advances each event through three states:
 
 If a worker dies between `next()` and `markProcessed()`, the row stays in `processing` —
 intentionally. Any redelivery rows that *did* get persisted before the crash remain durable, so
-listener-level retries still fire when their time comes. The stuck `processing` row is detectable
-by querying `event_outbox_status` (see [Future work](#future-work)).
+listener-level retries still fire when their time comes. To recover the wedged `processing` row
+itself, call `SqlEventStore::recoverStuckEvents()` from a separate scheduled job (see
+[Recovering stuck events](#recovering-stuck-events) below).
+
+### Recovering stuck events
+
+`SqlEventStore::recoverStuckEvents(CarbonInterval $olderThan): int` resets events that are stuck
+in `processing` back to `pending` so the next worker can claim them again. An event is "stuck"
+when its most recent `processing` audit row is older than `$olderThan`. The recovery writes a
+`pending` audit row tagged `Recovered from stuck processing state` so dashboards can distinguish
+organic vs. recovered transitions. The method returns the number of events it recovered and is
+safe to run alongside the main worker.
+
+```php
+use Carbon\CarbonInterval;
+
+// In a separate cron task — e.g. every minute:
+$recovered = $store->recoverStuckEvents(CarbonInterval::minutes(30));
+```
+
+The threshold should be comfortably longer than the longest dispatch you expect under healthy
+conditions. Too tight a threshold will pull events that are simply taking a while back into
+`pending` and double-dispatch them; listeners are expected to be idempotent regardless, but
+unnecessary work is unnecessary work.
+
+> Re-dispatch can re-fire listeners that already succeeded on the previous run. Listeners must
+> be idempotent for the recovery path to be safe.
 
 ---
 
@@ -684,54 +709,24 @@ RawEventStatus::processed   // event was dispatched to every listener (per-liste
 This section captures known gaps and what we'd want to add. The redelivery layer is the headline
 feature shipped now; what follows is intentionally deferred so we can let real usage shape it.
 
-### Stuck-events monitor
+### Force-complete recovery for processing rows
 
-If a worker dies between `next()` and `markProcessed()`, the row stays in
-`event_outbox.status = 'processing'` indefinitely. Redelivery rows that *did* get persisted are
-durable and will still fire — but the parent event row is wedged.
-
-Detection query (works today against existing tables):
-
-```sql
-SELECT id, name, created_at, publish_at
-FROM event_outbox
-WHERE status = 'processing'
-  AND id IN (
-    SELECT event_id FROM event_outbox_status
-    WHERE status = 'processing'
-      AND created_at < NOW() - INTERVAL 30 MINUTE  -- pick a threshold that matches your workload
-  );
-```
-
-A future sweeper should support two recovery modes:
-
-- **Re-claim** (`processing → pending`) — safe **only** if listeners are idempotent. Re-dispatch
-  may re-fire listeners that already succeeded.
-- **Force-complete** (`processing → processed`) — safe only when the dispatch is believed to
-  have finished but the bookkeeping commit was lost. Should write a `processed` audit row marked
-  as recovered so dashboards can distinguish organic vs. recovered transitions.
-
-### Schema columns to consider when the monitor lands
-
-Based on Spring Modulith's `EVENT_PUBLICATION` table (the closest production-grade analogue):
-
-| Column | Why we'd want it |
-|---|---|
-| `completion_attempts` (INT) on `event_outbox` | How many times this event has been claimed for processing. Increments on every `next()`. Distinguishes "stuck once" from "repeatedly poisoning workers". |
-| `last_resubmission_date` (TIMESTAMP) on `event_outbox` | Distinguishes organic stuck rows from rows an operator has already touched. |
-| A `RESUBMITTED` enum case (or a `recovered_at` / `recovered_by` column on `event_outbox_status`) | So dashboards can show "rescued by hand" separately from happy path. |
-
-The existing `event_outbox_redelivery` table already tracks `attempt_number` and `last_error` at
-the *listener* level; the columns above are for *event-level* tracking, which we don't need yet
-but will once the monitor lands.
+`recoverStuckEvents()` re-claims rows (`processing → pending`) for re-dispatch. The other
+plausible recovery mode — **force-complete** (`processing → processed`) — is intentionally not
+exposed: it's only safe when the dispatch is believed to have finished but the bookkeeping
+commit was lost, and that's a judgement call that belongs in operator tooling rather than a
+library API. If you need it, the operation is two statements: `UPDATE event_outbox SET status =
+'processed' WHERE id = ?` and an audit insert with a recovery marker.
 
 ### Operational signals you can build today
 
-Without waiting for the in-library monitor, these are queryable from the existing tables:
+These are queryable from the existing tables:
 
-- "Events stuck in `processing` for more than T" — the SQL above.
 - "Listeners with permanent failures" — `SELECT * FROM event_outbox_redelivery WHERE status = 'failed'`.
 - "Average time-between rows in `event_outbox_status` by status pair" — reveals dispatch latency.
+- "Events recovered by the stuck-events sweeper" — `SELECT * FROM event_outbox_status WHERE error_message = 'Recovered from stuck processing state'`.
+
+See [ROADMAP.md](ROADMAP.md) for known limitations and planned work.
 
 ### Reference reading
 

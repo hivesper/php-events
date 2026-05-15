@@ -3,6 +3,7 @@
 namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterval;
 use JsonException;
 use Override;
 use PDO;
@@ -123,6 +124,71 @@ readonly class SqlEventStore implements EventStore
             $this->insertStatusAudit($eventId, RawEventStatus::processed->value);
 
             $this->commitIfStarted($startedTransaction);
+        } catch (Throwable $e) {
+            $this->rollBackIfStarted($startedTransaction);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Reset events wedged in `processing` back to `pending` so a worker can claim them again.
+     * A row counts as stuck when its most recent `processing` audit entry is older than
+     * $olderThan. Writes a `pending` audit row tagged "Recovered from stuck processing state"
+     * for each recovery so dashboards can distinguish organic vs. recovered transitions.
+     * Returns the number of events recovered.
+     *
+     * Call from a separate scheduled job; idempotent, safe to run alongside the main worker.
+     *
+     * @throws PDOException
+     */
+    public function recoverStuckEvents(CarbonInterval $olderThan): int
+    {
+        $thresholdAt = CarbonImmutable::now()->sub($olderThan)->format('Y-m-d H:i:s.u');
+
+        $stmt = $this->connection->prepare(
+            <<<SQL
+                SELECT e.id FROM event_outbox e
+                WHERE e.status = 'processing'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM event_outbox_status s
+                    WHERE s.event_id = e.id
+                      AND s.status = 'processing'
+                      AND s.created_at >= :threshold
+                  )
+            SQL,
+        );
+        $stmt->execute(['threshold' => $thresholdAt]);
+
+        /** @var list<string> $ids */
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        if ($ids === []) {
+            return 0;
+        }
+
+        $startedTransaction = $this->beginTransactionIfNeeded();
+
+        try {
+            $updateStmt = $this->connection->prepare(
+                "UPDATE event_outbox SET status = 'pending' WHERE id = :id AND status = 'processing'",
+            );
+
+            $recovered = 0;
+            foreach ($ids as $id) {
+                $updateStmt->execute(['id' => $id]);
+
+                if ($updateStmt->rowCount() === 0) {
+                    continue;
+                }
+
+                $this->insertStatusAudit($id, RawEventStatus::pending->value, 'Recovered from stuck processing state');
+                $recovered++;
+            }
+
+            $this->commitIfStarted($startedTransaction);
+
+            return $recovered;
         } catch (Throwable $e) {
             $this->rollBackIfStarted($startedTransaction);
 
