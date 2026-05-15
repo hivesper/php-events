@@ -14,6 +14,7 @@ use Vesper\Tool\Event\Infrastructure\Schema\SqliteRedeliverySchema;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
 use Vesper\Tool\Event\RedeliveryRequest;
+use Vesper\Tool\Event\RedeliveryStatus;
 use Vesper\Tool\Event\RedeliveryTracker;
 
 readonly class SqlRedeliveryTracker implements RedeliveryTracker
