@@ -19,7 +19,7 @@ class DefaultHandlerResolverTest extends TestCase
 
     public function test_returns_callable_directly(): void
     {
-        $callable = fn () => null;
+        $callable = fn() => null;
 
         $resolved = $this->resolver->resolve($callable);
 

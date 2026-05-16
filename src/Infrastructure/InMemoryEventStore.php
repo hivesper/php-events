@@ -18,6 +18,13 @@ class InMemoryEventStore implements EventStore
 
     #[Override] public function next(): ?RawEvent
     {
-        return array_shift($this->queue) ?? null;
+        $event = array_shift($this->queue);
+
+        return $event?->claim();
+    }
+
+    #[Override] public function markProcessed(RawEvent $event): void
+    {
+        // No-op: the in-memory queue discards events on next(); there is no persisted status to flip.
     }
 }

@@ -3,22 +3,22 @@
 namespace Vesper\Tool\Event;
 
 use Carbon\CarbonImmutable;
+use DomainException;
 use Ramsey\Uuid\Uuid;
 
-readonly class RawEvent
+class RawEvent
 {
     /**
      * @param array<string, mixed> $payload
      */
     private function __construct(
-        public string $id,
-        public string $name,
-        public RawEventStatus $status,
-        public array $payload,
-        public CarbonImmutable $createdAt,
-        public CarbonImmutable $publishAt,
-    ) {
-    }
+        public readonly string $id,
+        public readonly string $name,
+        private(set) RawEventStatus $status,
+        public readonly array $payload,
+        public readonly CarbonImmutable $createdAt,
+        public readonly CarbonImmutable $publishAt,
+    ) {}
 
     /**
      * @param array<string, mixed> $payload
@@ -57,5 +57,32 @@ readonly class RawEvent
             createdAt: $createdAt,
             publishAt: $publishAt,
         );
+    }
+
+    public function claim(): self
+    {
+        $this->requireStatus(RawEventStatus::pending, 'claim');
+
+        $this->status = RawEventStatus::processing;
+
+        return $this;
+    }
+
+    public function markProcessed(): self
+    {
+        $this->requireStatus(RawEventStatus::processing, 'markProcessed');
+
+        $this->status = RawEventStatus::processed;
+
+        return $this;
+    }
+
+    private function requireStatus(RawEventStatus $expected, string $operation): void
+    {
+        if ($this->status !== $expected) {
+            throw new DomainException(
+                "Cannot $operation an event in status {$this->status->value} (expected $expected->value).",
+            );
+        }
     }
 }

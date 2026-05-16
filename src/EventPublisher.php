@@ -10,8 +10,7 @@ readonly class EventPublisher
     public function __construct(
         private EventStore $store,
         private EventSerializer $serializer = new JacksonSerializer(),
-    ) {
-    }
+    ) {}
 
     public function publish(object $event, ?CarbonImmutable $publishAt = null): string
     {

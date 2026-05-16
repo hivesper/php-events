@@ -1,10 +1,8 @@
 <?php
 
-namespace Test\Tcds\Io\Ray\_Fixtures;
+namespace Test\Vesper\Tool\Event\_Fixtures;
 
 readonly class ListenerB
 {
-    public function __invoke(): void
-    {
-    }
+    public function __invoke(): void {}
 }

@@ -23,8 +23,7 @@ class EventSubscriberBuilder
     }
 
     /**
-     * @param string $name Plain, non-class event name.
-     * @param list<Subscriber> $listeners List of listeners to register for the event.
+     * @param list<Subscriber> $listeners
      *
      * @return self<TEvent>
      */
@@ -40,8 +39,8 @@ class EventSubscriberBuilder
     }
 
     /**
-     * @param Subscriber $listener Listener class to register for the events.
-     * @param list<string> $names Plain, non-class event names to register the listener for.
+     * @param Subscriber $listener
+     * @param list<string> $names
      *
      * @return self<TEvent>
      */
