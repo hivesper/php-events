@@ -5,6 +5,7 @@ namespace Test\Vesper\Tool\Event\Feature;
 use Carbon\CarbonImmutable;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
 use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
@@ -18,6 +19,8 @@ class SqlEventStoreAuditTest extends TestCase
     {
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        SqliteEventStoreSchema::create($this->pdo);
 
         $this->store = new SqlEventStore($this->pdo);
     }

@@ -19,7 +19,7 @@ Events are first written to a durable store (in-memory or SQL), then dispatched 
 - **Status audit trail** — every event status transition is recorded in `event_outbox_status` for ops visibility
 - **Scheduled delivery** — set `publishAt` in the future; the processor only picks up events whose time has come
 - **Worker-safe** — MySQL store uses `FOR UPDATE SKIP LOCKED` to allow multiple workers without double-processing
-- **Auto schema** — `SqlEventStore` and `SqlRedeliveryStore` each create their own tables on first boot, no migrations needed
+- **Schema templates** — versioned DDL files in `migrations/{mysql,sqlite}/` to drop into your migration tool, or a one-line `Schema::create()` helper for projects that want boot-time setup
 - **Clean architecture boundaries** — `EventSerializer` and `EventHydrator` keep `RawEvent` out of your application layer
 
 ---
@@ -335,16 +335,31 @@ $store = new InMemoryEventStore();
 
 ### SqlEventStore
 
-Production-ready persistent store. Requires a PDO connection to **MySQL** or **SQLite**. Creates the `event_outbox` table automatically on first boot.
+Production-ready persistent store. Requires a PDO connection to **MySQL** or **SQLite**. The store assumes its tables already exist — see [Setting up the schema](#setting-up-the-schema) below.
 
 ```php
-use Tcds\Io\Raw\Infrastructure\SqlEventStore;
+use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 
 $pdo   = new PDO('mysql:host=localhost;dbname=myapp', 'user', 'pass');
-$store = new SqlEventStore($pdo); // schema created here if not present
+$store = new SqlEventStore($pdo);
 ```
 
-**Schema created automatically:**
+> MySQL workers use `SELECT … FOR UPDATE SKIP LOCKED` on the `event_outbox` table for safe
+> concurrent processing.
+
+If you wire up a `RedeliveryStore` (see [Automatic retry & failure tracking](#automatic-retry--failure-tracking)),
+a third table `event_outbox_redelivery` holds per-listener retry state — install it from the same `migrations/` directory.
+
+### Setting up the schema
+
+Two options. Pick whichever matches how the host application manages schema.
+
+**Option 1 — your migration tool runs the shipped DDL (recommended).** Versioned templates live in `migrations/{mysql,sqlite}/` in this package. Each shipped file is immutable; future schema changes ship as new numbered files. The two initial files are:
+
+- `0001_create_event_outbox.sql` — required for `SqlEventStore` (creates `event_outbox` and `event_outbox_status`).
+- `0001_create_event_outbox_redelivery.sql` — required if you use `SqlRedeliveryStore` (creates `event_outbox_redelivery`).
+
+Either copy the SQL into your own migration file, or have your migration read it from `vendor/hivesper/php-events/migrations/{driver}/`. The DDL the package ships for MySQL looks like:
 
 ```sql
 CREATE TABLE event_outbox (
@@ -368,11 +383,17 @@ CREATE TABLE event_outbox_status (
 );
 ```
 
-> MySQL workers use `SELECT … FOR UPDATE SKIP LOCKED` on the `event_outbox` table for safe
-> concurrent processing.
+**Option 2 — call the shipped `Schema::create()` helper at boot.** Convenient for prototypes, single-app deployments, or projects without their own migration tool. The helper is idempotent (`CREATE … IF NOT EXISTS` on SQLite, `information_schema` check on MySQL), so it's safe to call on every boot — but be aware: if the host application also runs migrations, this can race with them. Prefer Option 1 in that case.
 
-If you wire up a `RedeliveryStore` (see [Automatic retry & failure tracking](#automatic-retry--failure-tracking)),
-a third table `event_outbox_redelivery` is created on demand for per-listener retry state.
+```php
+use Vesper\Tool\Event\Infrastructure\Schema\MysqlEventStoreSchema;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
+
+// run once at boot
+MysqlEventStoreSchema::create($pdo);   // or SqliteEventStoreSchema::create($pdo)
+```
+
+The redelivery table has matching `MysqlRedeliverySchema::create()` and `SqliteRedeliverySchema::create()` helpers.
 
 ### Event lifecycle
 
@@ -675,14 +696,14 @@ many attempts have been made, when the next one should run, what the last error 
 implementations:
 
 - **`InMemoryRedeliveryStore`** — array-backed, for tests and dev.
-- **`SqlRedeliveryStore`** — durable, MySQL/SQLite-compatible. Auto-creates its
-  `event_outbox_redelivery` table on first construction. Worker-safe via `FOR UPDATE SKIP LOCKED`
-  on MySQL.
+- **`SqlRedeliveryStore`** — durable, MySQL/SQLite-compatible. Worker-safe via `FOR UPDATE SKIP LOCKED`
+  on MySQL. Assumes its `event_outbox_redelivery` table already exists — see
+  [Setting up the schema](#setting-up-the-schema).
 
 ```php
 use Vesper\Tool\Event\Infrastructure\Redelivery\SqlRedeliveryStore;
 
-$store = new SqlRedeliveryStore($pdo); // schema created here if not present
+$store = new SqlRedeliveryStore($pdo);
 ```
 
 ### Wiring it together

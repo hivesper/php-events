@@ -52,17 +52,6 @@ column on MySQL).
 
 **Trigger:** first post-mortem where a permanently-failed row is unreadable.
 
-### Schema migrations
-
-Auto-create-on-construct is great for first boot but provides no path for
-schema evolution. Adding a column (e.g. `claimed_until` for a lease-based
-redelivery claim) won't backfill existing installations.
-
-**Likely shape:** a `schema_version` column on each table + a
-`migrate()` method that runs idempotent ALTERs ordered by version.
-
-**Trigger:** the first time we need to change an existing column.
-
 ## Scale concerns
 
 These matter once volume grows past a single moderate-sized service.

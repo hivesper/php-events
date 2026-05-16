@@ -8,8 +8,6 @@ use Override;
 use PDO;
 use RuntimeException;
 use Throwable;
-use Vesper\Tool\Event\Infrastructure\Schema\MysqlRedeliverySchema;
-use Vesper\Tool\Event\Infrastructure\Schema\SqliteRedeliverySchema;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
 use Vesper\Tool\Event\Redelivery\Redelivery;
@@ -18,10 +16,7 @@ use Vesper\Tool\Event\Redelivery\RedeliveryStore;
 
 readonly class SqlRedeliveryStore implements RedeliveryStore
 {
-    public function __construct(private PDO $connection)
-    {
-        $this->ensureRedeliverySchema();
-    }
+    public function __construct(private PDO $connection) {}
 
     #[Override]
     public function schedule(Redelivery $redelivery): void
@@ -246,17 +241,6 @@ readonly class SqlRedeliveryStore implements RedeliveryStore
         if ($this->connection->inTransaction()) {
             $this->connection->rollBack();
         }
-    }
-
-    private function ensureRedeliverySchema(): void
-    {
-        $driver = $this->driverName();
-
-        match ($driver) {
-            'mysql' => MysqlRedeliverySchema::create($this->connection),
-            'sqlite' => SqliteRedeliverySchema::create($this->connection),
-            default => throw new RuntimeException('Unsupported database driver: ' . $driver),
-        };
     }
 
     private function lockingClause(): string

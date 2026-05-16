@@ -5,6 +5,7 @@ namespace Test\Vesper\Tool\Event\Feature;
 use Carbon\CarbonImmutable;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
 use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 use Vesper\Tool\Event\RawEvent;
 
@@ -17,6 +18,8 @@ class SqlEventStoreTest extends TestCase
     {
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        SqliteEventStoreSchema::create($this->pdo);
 
         $this->store = new SqlEventStore($this->pdo);
     }
@@ -130,10 +133,10 @@ class SqlEventStoreTest extends TestCase
         self::assertNull($anotherStore->next());
     }
 
-    public function test_schema_is_idempotent_across_multiple_instantiations(): void
+    public function test_schema_create_is_idempotent(): void
     {
-        new SqlEventStore($this->pdo);
-        new SqlEventStore($this->pdo);
+        SqliteEventStoreSchema::create($this->pdo);
+        SqliteEventStoreSchema::create($this->pdo);
 
         self::assertTrue(true);
     }
