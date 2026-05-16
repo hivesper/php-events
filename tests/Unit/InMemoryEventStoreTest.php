@@ -4,6 +4,7 @@ namespace Test\Vesper\Tool\Event\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
+use Vesper\Tool\Event\RawEventStatus;
 use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 
 class InMemoryEventStoreTest extends TestCase
@@ -46,6 +47,19 @@ class InMemoryEventStoreTest extends TestCase
         $this->store->next();
 
         self::assertNull($this->store->next());
+    }
+
+    public function test_next_transitions_returned_event_from_pending_to_processing(): void
+    {
+        $event = TestEventFactory::retrieveOrderPlaced();
+        $this->store->add($event);
+
+        self::assertSame(RawEventStatus::pending, $event->status);
+
+        $claimed = $this->store->next();
+
+        self::assertNotNull($claimed);
+        self::assertSame(RawEventStatus::processing, $claimed->status);
     }
 
     public function test_multiple_events_can_be_enqueued_and_dequeued(): void

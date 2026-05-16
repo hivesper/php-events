@@ -7,24 +7,20 @@ use PDOException;
 
 class SqliteEventStoreSchema
 {
-    /**
-     * Ensure the outbox tables and indexes exist
-     *
-     * @throws PDOException
-     */
+    /** @throws PDOException */
     public static function create(PDO $connection): void
     {
         $connection->exec(
             <<<SQL
-                CREATE TABLE IF NOT EXISTS event_outbox (
-                    id         TEXT NOT NULL PRIMARY KEY,
-                    name       TEXT NOT NULL,
-                    status     TEXT NOT NULL,
-                    payload    TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    publish_at TEXT NOT NULL
-                )
-            SQL,
+                    CREATE TABLE IF NOT EXISTS event_outbox (
+                        id         TEXT NOT NULL PRIMARY KEY,
+                        name       TEXT NOT NULL,
+                        status     TEXT NOT NULL,
+                        payload    TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        publish_at TEXT NOT NULL
+                    )
+                SQL,
         );
 
         $connection->exec(
@@ -39,13 +35,13 @@ class SqliteEventStoreSchema
 
         $connection->exec(
             <<<SQL
-                CREATE TABLE IF NOT EXISTS event_outbox_status (
-                    event_id      TEXT NOT NULL,
-                    status        TEXT NOT NULL,
-                    error_message TEXT,
-                    created_at    TEXT NOT NULL
-                )
-            SQL,
+                    CREATE TABLE IF NOT EXISTS event_outbox_status (
+                        event_id      TEXT NOT NULL,
+                        status        TEXT NOT NULL,
+                        error_message TEXT,
+                        created_at    TEXT NOT NULL
+                    )
+                SQL,
         );
 
         $connection->exec(

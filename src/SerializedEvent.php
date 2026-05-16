@@ -10,6 +10,5 @@ readonly class SerializedEvent
     public function __construct(
         public string $name,
         public array $payload,
-    ) {
-    }
+    ) {}
 }

@@ -1,14 +1,15 @@
 <?php
 
-namespace Test\Vesper\Tool\Event\Unit;
+namespace Test\Vesper\Tool\Event\Unit\Redelivery;
 
 use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
-use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryStore;
+use Vesper\Tool\Event\Infrastructure\Redelivery\InMemoryRedeliveryStore;
 use Vesper\Tool\Event\RawEvent;
-use Vesper\Tool\Event\RedeliveryRequest;
+use Vesper\Tool\Event\Redelivery\Redelivery;
+use Vesper\Tool\Event\Redelivery\RedeliveryStatus;
 
 class InMemoryRedeliveryStoreTest extends TestCase
 {
@@ -28,25 +29,40 @@ class InMemoryRedeliveryStoreTest extends TestCase
 
     public function test_schedule_makes_redelivery_pickable_when_time_passes(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
-            event: $this->event,
-            listener: 'App\\SomeListener',
-            attemptNumber: 1,
-            nextRetryAt: CarbonImmutable::now()->subSecond(),
-            lastError: new RuntimeException('boom'),
-        ));
+        $now = CarbonImmutable::parse('2026-05-16 12:00:00');
+        CarbonImmutable::setTestNow($now);
 
-        $due = $this->store->next();
+        try {
+            $nextRetryAt = $now->subSecond();
+            $this->store->schedule(Redelivery::schedule(
+                event: $this->event,
+                listener: 'App\\SomeListener',
+                attemptNumber: 1,
+                nextRetryAt: $nextRetryAt,
+                lastError: new RuntimeException('boom'),
+            ));
 
-        self::assertNotNull($due);
-        self::assertSame($this->event->id, $due->event->id);
-        self::assertSame('App\\SomeListener', $due->listener);
-        self::assertSame(1, $due->attemptNumber);
+            $due = $this->store->next();
+
+            $expected = Redelivery::retrieve(
+                event: $this->event,
+                listener: 'App\\SomeListener',
+                status: RedeliveryStatus::Dispatching,
+                attemptNumber: 1,
+                nextRetryAt: $nextRetryAt,
+                lastError: 'RuntimeException: boom',
+                createdAt: $now,
+                updatedAt: $now,
+            );
+            self::assertEquals($expected, $due);
+        } finally {
+            CarbonImmutable::setTestNow();
+        }
     }
 
     public function test_next_excludes_rows_whose_retry_time_is_in_the_future(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\SomeListener',
             attemptNumber: 1,
@@ -62,14 +78,14 @@ class InMemoryRedeliveryStoreTest extends TestCase
         $eventEarly = TestEventFactory::retrieveOrderPlaced(['n' => 1]);
         $eventLate = TestEventFactory::retrieveOrderPlaced(['n' => 2]);
 
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $eventLate,
             listener: 'App\\Late',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
         ));
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $eventEarly,
             listener: 'App\\Early',
             attemptNumber: 1,
@@ -85,7 +101,7 @@ class InMemoryRedeliveryStoreTest extends TestCase
 
     public function test_next_transitions_claimed_row_so_a_second_call_skips_it(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 1,
@@ -97,28 +113,29 @@ class InMemoryRedeliveryStoreTest extends TestCase
         $second = $this->store->next();
 
         self::assertNotNull($first);
-        self::assertNull($second, 'a second call must skip the just-claimed row');
+        self::assertNull($second);
     }
 
-    public function test_mark_succeeded_finalises_a_claimed_row(): void
+    public function test_update_with_succeeded_finalises_a_claimed_row(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 1,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
         ));
-        $this->store->next(); // claim
+        $claimed = $this->store->next();
+        self::assertNotNull($claimed);
 
-        $this->store->markSucceeded($this->event->id, 'App\\Listener');
+        $this->store->update($claimed->markSucceeded());
 
         self::assertNull($this->store->next());
     }
 
-    public function test_mark_succeeded_is_a_noop_when_row_is_not_in_dispatching(): void
+    public function test_update_is_a_noop_when_row_is_not_in_dispatching(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 1,
@@ -126,39 +143,50 @@ class InMemoryRedeliveryStoreTest extends TestCase
             lastError: new RuntimeException('boom'),
         ));
 
-        $this->store->markSucceeded($this->event->id, 'App\\Listener');
+        $stale = Redelivery::retrieve(
+            event: $this->event,
+            listener: 'App\\Listener',
+            status: RedeliveryStatus::Succeeded,
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: 'RuntimeException: boom',
+            createdAt: CarbonImmutable::now(),
+            updatedAt: CarbonImmutable::now(),
+        );
+        $this->store->update($stale);
 
-        $due = $this->store->next();
-        self::assertNotNull($due, 'row remains claimable because markSucceeded did not apply');
+        self::assertNotNull($this->store->next());
     }
 
-    public function test_mark_failed_permanently_finalises_a_claimed_row(): void
+    public function test_update_with_failed_permanently_finalises_a_claimed_row(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 5,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
         ));
-        $this->store->next(); // claim
+        $claimed = $this->store->next();
+        self::assertNotNull($claimed);
 
-        $this->store->markFailedPermanently($this->event->id, 'App\\Listener', new RuntimeException('final'));
+        $this->store->update($claimed->markFailedPermanently(new RuntimeException('final')));
 
         self::assertNull($this->store->next());
     }
 
     public function test_retry_now_re_queues_a_permanently_failed_row(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 5,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
             lastError: new RuntimeException('boom'),
         ));
-        $this->store->next(); // claim
-        $this->store->markFailedPermanently($this->event->id, 'App\\Listener', new RuntimeException('final'));
+        $claimed = $this->store->next();
+        self::assertNotNull($claimed);
+        $this->store->update($claimed->markFailedPermanently(new RuntimeException('final')));
 
         $this->store->retryNow($this->event->id, 'App\\Listener');
 
@@ -166,35 +194,44 @@ class InMemoryRedeliveryStoreTest extends TestCase
 
         self::assertNotNull($due);
         self::assertSame('App\\Listener', $due->listener);
-        self::assertSame(5, $due->attemptNumber, 'attempt count is preserved across retryNow()');
+        self::assertSame(5, $due->attemptNumber);
     }
 
-    public function test_schedule_is_idempotent_on_event_id_listener(): void
+    public function test_schedule_is_a_noop_when_a_row_already_exists(): void
     {
-        $this->store->schedule(new RedeliveryRequest(
-            event: $this->event,
-            listener: 'App\\Listener',
-            attemptNumber: 1,
-            nextRetryAt: CarbonImmutable::now()->addMinute(),
-            lastError: new RuntimeException('boom'),
-        ));
-        $this->store->schedule(new RedeliveryRequest(
+        $this->store->schedule(Redelivery::schedule(
             event: $this->event,
             listener: 'App\\Listener',
             attemptNumber: 2,
             nextRetryAt: CarbonImmutable::now()->subSecond(),
-            lastError: new RuntimeException('again'),
+            lastError: new RuntimeException('first'),
+        ));
+        $this->store->schedule(Redelivery::schedule(
+            event: $this->event,
+            listener: 'App\\Listener',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->addMinute(),
+            lastError: new RuntimeException('replay-from-recovered-event'),
         ));
 
         $due = $this->store->next();
 
         self::assertNotNull($due);
-        self::assertSame(2, $due->attemptNumber, 'rescheduling updates attempt count, does not insert a duplicate');
+        self::assertSame(2, $due->attemptNumber);
+        self::assertStringContainsString('first', $due->lastError);
     }
 
-    public function test_mark_succeeded_is_a_noop_for_unknown_row(): void
+    public function test_update_is_a_noop_for_unknown_row(): void
     {
-        $this->store->markSucceeded('unknown-id', 'App\\Listener');
+        $orphan = Redelivery::schedule(
+            event: $this->event,
+            listener: 'App\\Listener',
+            attemptNumber: 1,
+            nextRetryAt: CarbonImmutable::now()->subSecond(),
+            lastError: new RuntimeException('boom'),
+        )->claim()->markSucceeded();
+
+        $this->store->update($orphan);
 
         self::assertNull($this->store->next());
     }

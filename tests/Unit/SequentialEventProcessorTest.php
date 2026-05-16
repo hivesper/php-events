@@ -2,22 +2,17 @@
 
 namespace Test\Vesper\Tool\Event\Unit;
 
-use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
-use Test\Vesper\Tool\Event\_Fixtures\IgnorableExceptionStub;
 use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 use Test\Vesper\Tool\Event\_Fixtures\TrackingEventStore;
 use Test\Vesper\Tool\Event\_Fixtures\TrackingListener;
 use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\EventSubscriberMap;
 use Vesper\Tool\Event\HandlerResolver;
+use Vesper\Tool\Event\Infrastructure\Dispatch\DefaultListenerDispatcher;
 use Vesper\Tool\Event\Infrastructure\InMemoryEventStore;
-use Vesper\Tool\Event\Infrastructure\InMemoryRedeliveryStore;
 use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
-use Vesper\Tool\Event\RedeliveryRequest;
-use Vesper\Tool\Event\RedeliveryStore;
-use Vesper\Tool\Event\Retry\RetryPolicy;
 
 class SequentialEventProcessorTest extends TestCase
 {
@@ -55,7 +50,7 @@ class SequentialEventProcessorTest extends TestCase
 
         $this->processor->process($this->store);
 
-        self::assertSame(1, $received->order_id);
+        self::assertEquals((object) ['order_id' => 1], $received);
     }
 
     public function test_calls_all_subscribers_for_the_same_event_type(): void
@@ -80,20 +75,20 @@ class SequentialEventProcessorTest extends TestCase
         $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 1]));
         $this->store->add(TestEventFactory::retrievePaymentReceived(['amount' => 50]));
 
-        $orderId = null;
-        $amount = null;
+        $orderEvent = null;
+        $paymentEvent = null;
 
-        $this->subscribers->subscribe('order.placed', function (object $e) use (&$orderId) {
-            $orderId = $e->order_id;
+        $this->subscribers->subscribe('order.placed', function (object $e) use (&$orderEvent) {
+            $orderEvent = $e;
         });
-        $this->subscribers->subscribe('payment.received', function (object $e) use (&$amount) {
-            $amount = $e->amount;
+        $this->subscribers->subscribe('payment.received', function (object $e) use (&$paymentEvent) {
+            $paymentEvent = $e;
         });
 
         $this->processor->process($this->store);
 
-        self::assertSame(1, $orderId);
-        self::assertSame(50, $amount);
+        self::assertEquals((object) ['order_id' => 1], $orderEvent);
+        self::assertEquals((object) ['amount' => 50], $paymentEvent);
     }
 
     public function test_processes_all_queued_events(): void
@@ -127,15 +122,15 @@ class SequentialEventProcessorTest extends TestCase
 
         $listener = new TrackingListener();
 
-        $resolver = $this->createStub(HandlerResolver::class);
-        $resolver->method('resolve')->willReturn($listener);
-
         $subscribers = new EventSubscriberMap(['order.placed' => [TrackingListener::class]]);
-        $processor = new SequentialEventProcessor($subscribers, $resolver);
+        $processor = new SequentialEventProcessor(
+            $subscribers,
+            new DefaultListenerDispatcher(resolver: $this->resolverReturning($listener)),
+        );
 
         $processor->process($this->store);
 
-        self::assertSame(42, $listener->received()->order_id);
+        self::assertEquals((object) ['order_id' => 42], $listener->received());
     }
 
     public function test_does_not_dispatch_to_subscriber_for_a_different_type(): void
@@ -165,49 +160,22 @@ class SequentialEventProcessorTest extends TestCase
             $received = $e;
         };
 
-        $hydrator = $this->createMock(EventHydrator::class);
-        $hydrator->method('hydrate')
-            ->with('order.placed', ['order_id' => 7], $subscriber)
-            ->willReturn($typedEvent);
-
         $subscribers = new EventSubscriberMap();
         $subscribers->subscribe('order.placed', $subscriber);
 
-        $processor = new SequentialEventProcessor($subscribers, hydrator: $hydrator);
+        $processor = new SequentialEventProcessor(
+            $subscribers,
+            new DefaultListenerDispatcher(hydrator: $this->mockHydratorReturning(
+                name: 'order.placed',
+                payload: ['order_id' => 7],
+                subscriber: $subscriber,
+                event: $typedEvent,
+            )),
+        );
         $processor->process($this->store);
 
         self::assertSame($typedEvent, $received);
     }
-
-    public function test_hydrates_once_per_subscriber_passing_subscriber_as_context(): void
-    {
-        $this->store->add(TestEventFactory::retrieveOrderPlaced(['order_id' => 1]));
-
-        $subscriberA = function () {};
-        $subscriberB = function () {};
-
-        $hydrateCalls = [];
-        $hydrator = $this->createMock(EventHydrator::class);
-        $hydrator->expects($this->exactly(2))
-            ->method('hydrate')
-            ->willReturnCallback(function (string $name, array $payload, callable $subscriber) use (&$hydrateCalls): object {
-                $hydrateCalls[] = $subscriber;
-                return (object) $payload;
-            });
-
-        $subscribers = new EventSubscriberMap();
-        $subscribers->subscribe('order.placed', $subscriberA);
-        $subscribers->subscribe('order.placed', $subscriberB);
-
-        $processor = new SequentialEventProcessor($subscribers, hydrator: $hydrator);
-        $processor->process($this->store);
-
-        self::assertCount(2, $hydrateCalls);
-        self::assertSame($subscriberA, $hydrateCalls[0]);
-        self::assertSame($subscriberB, $hydrateCalls[1]);
-    }
-
-    // ── retry policy / redelivery ──────────────────────────────────────────────
 
     public function test_calls_mark_processed_after_each_event_succeeds(): void
     {
@@ -222,214 +190,42 @@ class SequentialEventProcessorTest extends TestCase
         self::assertSame([$event->id], $store->markProcessedCalls);
     }
 
-    public function test_does_not_call_mark_processed_when_a_listener_throws_in_fail_fast_mode(): void
+    public function test_lets_listener_exceptions_propagate(): void
     {
-        $store = new TrackingEventStore();
-        $event = TestEventFactory::retrieveOrderPlaced();
-        $store->add($event);
+        $this->store->add(TestEventFactory::retrieveOrderPlaced());
 
         $this->subscribers->subscribe('order.placed', function () {
             throw new RuntimeException('boom');
         });
 
-        try {
-            $this->processor->process($store);
-            self::fail('Expected exception was not thrown');
-        } catch (RuntimeException) {
-            // expected
-        }
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('boom');
 
-        self::assertSame([], $store->markProcessedCalls, 'event must remain in processing when dispatch propagates');
+        $this->processor->process($this->store);
     }
 
-    public function test_persists_failure_to_tracker_for_later_retry(): void
+    private function resolverReturning(callable|object $listener): HandlerResolver
     {
-        $event = TestEventFactory::retrieveOrderPlaced();
-        $this->store->add($event);
+        $resolver = $this->createStub(HandlerResolver::class);
+        $resolver->method('resolve')->willReturn($listener);
 
-        $exception = new RuntimeException('boom');
-        $this->subscribers->subscribe('order.placed', function () use ($exception) {
-            throw $exception;
-        });
-
-        $tracker = $this->createMock(RedeliveryStore::class);
-        $tracker->expects($this->once())
-            ->method('schedule')
-            ->with($this->callback(
-                fn(RedeliveryRequest $r): bool =>
-                    $r->event->id === $event->id
-                    && $r->listener === 'Closure'
-                    && $r->attemptNumber === 1
-                    && $r->lastError === $exception,
-            ));
-        $tracker->method('next')->willReturn(null);
-
-        $processor = new SequentialEventProcessor(
-            $this->subscribers,
-            retryPolicy: self::policyReturning(retryDelayMs: 50),
-            redeliveryStore: $tracker,
-        );
-
-        $processor->process($this->store);
-    }
-
-    public function test_propagates_failure_when_retry_policy_returns_null_and_tracker_configured(): void
-    {
-        $this->store->add(TestEventFactory::retrieveOrderPlaced());
-
-        $exception = new RuntimeException('always fails');
-        $this->subscribers->subscribe('order.placed', function () use ($exception) {
-            throw $exception;
-        });
-
-        $tracker = $this->createMock(RedeliveryStore::class);
-        $tracker->expects($this->never())->method('schedule');
-        $tracker->method('next')->willReturn(null);
-
-        $processor = new SequentialEventProcessor(
-            $this->subscribers,
-            retryPolicy: self::policyReturning(retryDelayMs: 50, exhaustAfter: 0),
-            redeliveryStore: $tracker,
-        );
-
-        $this->expectExceptionObject($exception);
-        $processor->process($this->store);
-    }
-
-    public function test_propagates_failure_when_no_tracker_configured(): void
-    {
-        $this->store->add(TestEventFactory::retrieveOrderPlaced());
-
-        $exception = new RuntimeException('boom');
-        $this->subscribers->subscribe('order.placed', function () use ($exception) {
-            throw $exception;
-        });
-
-        $processor = new SequentialEventProcessor(
-            $this->subscribers,
-            retryPolicy: self::policyReturning(retryDelayMs: 50),
-        );
-
-        $this->expectExceptionObject($exception);
-        $processor->process($this->store);
-    }
-
-    public function test_calls_mark_succeeded_when_listener_succeeds_with_tracker_configured(): void
-    {
-        $event = TestEventFactory::retrieveOrderPlaced();
-        $this->store->add($event);
-
-        $this->subscribers->subscribe('order.placed', function () {});
-
-        $tracker = $this->createMock(RedeliveryStore::class);
-        $tracker->expects($this->once())
-            ->method('markSucceeded')
-            ->with($event->id, 'Closure');
-        $tracker->method('next')->willReturn(null);
-
-        $processor = new SequentialEventProcessor($this->subscribers, redeliveryStore: $tracker);
-        $processor->process($this->store);
-    }
-
-    public function test_ignored_exception_short_circuits_with_no_retry_no_propagation_no_tracker_calls(): void
-    {
-        $this->store->add(TestEventFactory::retrieveOrderPlaced());
-
-        $calls = 0;
-        $this->subscribers->subscribe('order.placed', function () use (&$calls) {
-            $calls++;
-            throw new IgnorableExceptionStub('expected domain failure');
-        });
-
-        $tracker = $this->createMock(RedeliveryStore::class);
-        $tracker->expects($this->never())->method('schedule');
-        $tracker->expects($this->never())->method('markFailedPermanently');
-        $tracker->expects($this->never())->method('markSucceeded');
-        $tracker->method('next')->willReturn(null);
-
-        $processor = new SequentialEventProcessor(
-            $this->subscribers,
-            retryPolicy: self::policyReturning(retryDelayMs: 10),
-            redeliveryStore: $tracker,
-            ignoredExceptions: [IgnorableExceptionStub::class],
-        );
-
-        $processor->process($this->store);
-
-        self::assertSame(1, $calls, 'listener ran exactly once and was not retried');
-    }
-
-    public function test_process_next_redelivery_dispatches_due_redelivery(): void
-    {
-        $event = TestEventFactory::retrieveOrderPlaced();
-
-        $tracker = new InMemoryRedeliveryStore();
-        $tracker->schedule(new RedeliveryRequest(
-            event: $event,
-            listener: 'Closure',
-            attemptNumber: 2,
-            nextRetryAt: CarbonImmutable::now()->subSecond(),
-            lastError: new RuntimeException('earlier failure'),
-        ));
-
-        $received = null;
-        $this->subscribers->subscribe('order.placed', function (object $e) use (&$received) {
-            $received = $e;
-        });
-
-        $processor = new SequentialEventProcessor($this->subscribers, redeliveryStore: $tracker);
-        $processor->processNextRedelivery();
-
-        self::assertNotNull($received, 'redelivery dispatch invoked the listener');
-        self::assertNull($tracker->next(), 'redelivery row marked succeeded after dispatch');
-    }
-
-    public function test_calls_mark_failed_permanently_when_no_more_retries_with_tracker(): void
-    {
-        $this->store->add(TestEventFactory::retrieveOrderPlaced());
-
-        $exception = new RuntimeException('boom');
-        $this->subscribers->subscribe('order.placed', function () use ($exception) {
-            throw $exception;
-        });
-
-        $tracker = $this->createMock(RedeliveryStore::class);
-        $tracker->expects($this->once())->method('markFailedPermanently');
-        $tracker->expects($this->never())->method('schedule');
-        $tracker->method('next')->willReturn(null);
-
-        $processor = new SequentialEventProcessor(
-            $this->subscribers,
-            redeliveryStore: $tracker,
-        );
-
-        try {
-            $processor->process($this->store);
-            self::fail('expected exception');
-        } catch (RuntimeException) {
-            // expected — base class is fail-fast
-        }
+        return $resolver;
     }
 
     /**
-     * Build a RetryPolicy stub that returns now()+$retryDelayMs for the first $exhaustAfter
-     * attempts, then null.
+     * @param array<string, mixed> $payload
      */
-    private static function policyReturning(int $retryDelayMs, int $exhaustAfter = 5): RetryPolicy
-    {
-        return new readonly class ($retryDelayMs, $exhaustAfter) implements RetryPolicy {
-            public function __construct(
-                private int $retryDelayMs,
-                private int $exhaustAfter,
-            ) {}
+    private function mockHydratorReturning(
+        string $name,
+        array $payload,
+        callable|string $subscriber,
+        object $event,
+    ): EventHydrator {
+        $hydrator = $this->createMock(EventHydrator::class);
+        $hydrator->method('hydrate')
+            ->with($name, $payload, $subscriber)
+            ->willReturn($event);
 
-            public function nextRetryAt(int $previousAttempt): ?CarbonImmutable
-            {
-                if ($previousAttempt > $this->exhaustAfter) {
-                    return null;
-                }
-                return CarbonImmutable::now()->addMilliseconds($this->retryDelayMs);
-            }
-        };
+        return $hydrator;
     }
 }

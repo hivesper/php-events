@@ -18,7 +18,7 @@ class EventSubscriberBuilderTest extends TestCase
 
     public function test_eventName_registers_callable_as_listener(): void
     {
-        $listener = fn () => null;
+        $listener = fn() => null;
 
         $result = EventSubscriberBuilder::create()
             ->eventName('order.placed', [$listener])
@@ -82,7 +82,7 @@ class EventSubscriberBuilderTest extends TestCase
 
     public function test_duplicate_callable_listeners_are_deduplicated(): void
     {
-        $listener = fn () => null;
+        $listener = fn() => null;
 
         $result = EventSubscriberBuilder::create()
             ->eventName('order.placed', [$listener])
@@ -94,8 +94,8 @@ class EventSubscriberBuilderTest extends TestCase
 
     public function test_distinct_callable_listeners_are_not_deduplicated(): void
     {
-        $a = fn () => null;
-        $b = fn () => null;
+        $a = fn() => null;
+        $b = fn() => null;
 
         $result = EventSubscriberBuilder::create()
             ->eventName('order.placed', [$a])

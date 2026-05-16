@@ -41,52 +41,63 @@ class SqlEventStoreAuditTest extends TestCase
         $retrieved = $this->store->next();
 
         self::assertNotNull($retrieved);
-        self::assertSame(RawEventStatus::processing, $retrieved->status, 'returned RawEvent reflects new status');
-        self::assertSame('processing', $this->fetchEventStatus($event->id), 'event_outbox row was flipped to processing');
-
-        $rows = $this->fetchAuditRows($event->id);
-        self::assertCount(2, $rows);
-        self::assertSame('pending', $rows[0]['status']);
-        self::assertSame('processing', $rows[1]['status']);
+        self::assertSame(RawEventStatus::processing, $retrieved->status);
+        self::assertSame('processing', $this->fetchEventStatus($event->id));
+        self::assertSame(
+            [
+                ['status' => 'pending', 'error_message' => null],
+                ['status' => 'processing', 'error_message' => null],
+            ],
+            $this->fetchAuditRows($event->id),
+        );
     }
 
     public function test_mark_processed_advances_event_and_inserts_audit_row(): void
     {
         $event = self::createEvent('order.placed');
         $this->store->add($event);
-        $this->store->next();
+        $claimed = $this->store->next();
+        self::assertNotNull($claimed);
 
-        $this->store->markProcessed($event->id);
+        $claimed->markProcessed();
+        $this->store->markProcessed($claimed);
 
         self::assertSame('processed', $this->fetchEventStatus($event->id));
-
-        $rows = $this->fetchAuditRows($event->id);
-        self::assertCount(3, $rows);
-        self::assertSame('pending', $rows[0]['status']);
-        self::assertSame('processing', $rows[1]['status']);
-        self::assertSame('processed', $rows[2]['status']);
+        self::assertSame(
+            [
+                ['status' => 'pending', 'error_message' => null],
+                ['status' => 'processing', 'error_message' => null],
+                ['status' => 'processed', 'error_message' => null],
+            ],
+            $this->fetchAuditRows($event->id),
+        );
     }
 
     public function test_next_does_not_pick_up_a_row_already_in_processing(): void
     {
         $event = self::createEvent('order.placed');
         $this->store->add($event);
-        $this->store->next(); // pending → processing
+        $this->store->next();
 
-        // A second call must not pick up the processing row (it's not pending anymore).
         self::assertNull($this->store->next());
     }
 
-    public function test_mark_processed_is_a_noop_when_row_is_not_in_processing(): void
+    public function test_mark_processed_is_a_noop_when_db_row_is_not_in_processing(): void
     {
         $event = self::createEvent('order.placed');
         $this->store->add($event);
 
-        // Skip next(); call markProcessed directly. The guard `WHERE status='processing'` should
-        // make the UPDATE a no-op for a row still in 'pending'.
-        $this->store->markProcessed($event->id);
+        $stale = RawEvent::retrieve(
+            id: $event->id,
+            name: $event->name,
+            status: RawEventStatus::processed,
+            payload: [],
+            createdAt: $event->createdAt,
+            publishAt: $event->publishAt,
+        );
+        $this->store->markProcessed($stale);
 
-        self::assertSame('pending', $this->fetchEventStatus($event->id), 'pending row is left untouched');
+        self::assertSame('pending', $this->fetchEventStatus($event->id));
     }
 
     /**

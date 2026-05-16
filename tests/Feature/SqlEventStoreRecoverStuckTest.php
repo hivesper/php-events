@@ -27,7 +27,7 @@ class SqlEventStoreRecoverStuckTest extends TestCase
         $event = self::createEvent();
         $this->store->add($event);
 
-        $this->store->next(); // pending → processing
+        $this->store->next();
         $this->backdateLatestProcessingAuditRow($event->id, CarbonImmutable::now()->subHour());
 
         $recovered = $this->store->recoverStuckEvents(CarbonInterval::minutes(30));
@@ -40,9 +40,7 @@ class SqlEventStoreRecoverStuckTest extends TestCase
     {
         $event = self::createEvent();
         $this->store->add($event);
-
         $this->store->next();
-        // Don't backdate — audit row is fresh.
 
         $recovered = $this->store->recoverStuckEvents(CarbonInterval::minutes(30));
 
@@ -54,7 +52,6 @@ class SqlEventStoreRecoverStuckTest extends TestCase
     {
         $event = self::createEvent();
         $this->store->add($event);
-        // Skip next() — row stays in pending.
 
         $recovered = $this->store->recoverStuckEvents(CarbonInterval::seconds(0));
 
@@ -66,8 +63,10 @@ class SqlEventStoreRecoverStuckTest extends TestCase
     {
         $event = self::createEvent();
         $this->store->add($event);
-        $this->store->next();
-        $this->store->markProcessed($event->id);
+        $claimed = $this->store->next();
+        self::assertNotNull($claimed);
+        $claimed->markProcessed();
+        $this->store->markProcessed($claimed);
         $this->backdateLatestProcessingAuditRow($event->id, CarbonImmutable::now()->subHour());
 
         $recovered = $this->store->recoverStuckEvents(CarbonInterval::minutes(30));
@@ -90,8 +89,10 @@ class SqlEventStoreRecoverStuckTest extends TestCase
             fn(array $row): bool => $row['error_message'] === 'Recovered from stuck processing state',
         ));
 
-        self::assertCount(1, $recoveryRows, 'exactly one recovery audit row was written');
-        self::assertSame('pending', $recoveryRows[0]['status']);
+        self::assertSame(
+            [['status' => 'pending', 'error_message' => 'Recovered from stuck processing state']],
+            $recoveryRows,
+        );
     }
 
     public function test_recovered_event_can_be_processed_again(): void
@@ -137,10 +138,10 @@ class SqlEventStoreRecoverStuckTest extends TestCase
     {
         $this->pdo->prepare(
             <<<SQL
-            UPDATE event_outbox_status
-                SET created_at = :created_at
-                WHERE event_id = :event_id AND status = 'processing'
-            SQL,
+                UPDATE event_outbox_status
+                    SET created_at = :created_at
+                    WHERE event_id = :event_id AND status = 'processing'
+                SQL,
         )->execute([
             'event_id' => $eventId,
             'created_at' => $newCreatedAt->format('Y-m-d H:i:s.u'),

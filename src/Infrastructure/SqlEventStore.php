@@ -26,9 +26,9 @@ readonly class SqlEventStore implements EventStore
     {
         $stmt = $this->connection->prepare(
             <<<SQL
-            INSERT INTO event_outbox (id, name, status, payload, created_at, publish_at)
-                VALUES (:id, :name, :status, :payload, :created_at, :publish_at)
-            SQL,
+                INSERT INTO event_outbox (id, name, status, payload, created_at, publish_at)
+                    VALUES (:id, :name, :status, :payload, :created_at, :publish_at)
+                SQL,
         );
 
         $stmt->execute([
@@ -46,37 +46,39 @@ readonly class SqlEventStore implements EventStore
     #[Override]
     public function next(): ?RawEvent
     {
-        $startedTransaction = $this->beginTransactionIfNeeded();
+        $this->connection->beginTransaction();
 
         try {
             $row = $this->fetchNextPendingRow();
 
             if ($row === null) {
-                $this->commitIfStarted($startedTransaction);
+                $this->connection->commit();
                 return null;
             }
-
-            $this->connection->prepare(
-                "UPDATE event_outbox SET status = 'processing' WHERE id = :id",
-            )->execute(['id' => $row['id']]);
-
-            $this->insertStatusAudit($row['id'], RawEventStatus::processing->value);
-
-            $this->commitIfStarted($startedTransaction);
 
             /** @var array<string, mixed> $payload */
             $payload = json_decode($row['payload'], true, flags: JSON_THROW_ON_ERROR);
 
-            return RawEvent::retrieve(
+            $event = RawEvent::retrieve(
                 id: $row['id'],
                 name: $row['name'],
-                status: RawEventStatus::processing,
+                status: RawEventStatus::pending,
                 payload: $payload,
                 createdAt: new CarbonImmutable($row['created_at']),
                 publishAt: new CarbonImmutable($row['publish_at']),
-            );
+            )->claim();
+
+            $this->connection->prepare(
+                "UPDATE event_outbox SET status = :status WHERE id = :id",
+            )->execute(['status' => $event->status->value, 'id' => $event->id]);
+
+            $this->insertStatusAudit($event->id, $event->status->value);
+
+            $this->connection->commit();
+
+            return $event;
         } catch (Throwable $e) {
-            $this->rollBackIfStarted($startedTransaction);
+            $this->rollBackIfActive();
 
             throw $e;
         }
@@ -84,24 +86,24 @@ readonly class SqlEventStore implements EventStore
 
     /** UPDATE is guarded by status='processing' so a row a sweep already reclaimed is not overwritten. */
     #[Override]
-    public function markProcessed(string $eventId): void
+    public function markProcessed(RawEvent $event): void
     {
-        $startedTransaction = $this->beginTransactionIfNeeded();
+        $this->connection->beginTransaction();
 
         try {
             $this->connection->prepare(
                 <<<SQL
-                UPDATE event_outbox
-                    SET status = 'processed'
-                    WHERE id = :id AND status = 'processing'
-                SQL,
-            )->execute(['id' => $eventId]);
+                    UPDATE event_outbox
+                        SET status = :status
+                        WHERE id = :id AND status = 'processing'
+                    SQL,
+            )->execute(['status' => $event->status->value, 'id' => $event->id]);
 
-            $this->insertStatusAudit($eventId, RawEventStatus::processed->value);
+            $this->insertStatusAudit($event->id, $event->status->value);
 
-            $this->commitIfStarted($startedTransaction);
+            $this->connection->commit();
         } catch (Throwable $e) {
-            $this->rollBackIfStarted($startedTransaction);
+            $this->rollBackIfActive();
 
             throw $e;
         }
@@ -120,15 +122,15 @@ readonly class SqlEventStore implements EventStore
 
         $stmt = $this->connection->prepare(
             <<<SQL
-                SELECT e.id FROM event_outbox e
-                WHERE e.status = 'processing'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM event_outbox_status s
-                    WHERE s.event_id = e.id
-                      AND s.status = 'processing'
-                      AND s.created_at >= :threshold
-                  )
-            SQL,
+                    SELECT e.id FROM event_outbox e
+                    WHERE e.status = 'processing'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM event_outbox_status s
+                        WHERE s.event_id = e.id
+                          AND s.status = 'processing'
+                          AND s.created_at >= :threshold
+                      )
+                SQL,
         );
         $stmt->execute(['threshold' => $thresholdAt]);
 
@@ -139,7 +141,7 @@ readonly class SqlEventStore implements EventStore
             return 0;
         }
 
-        $startedTransaction = $this->beginTransactionIfNeeded();
+        $this->connection->beginTransaction();
 
         try {
             $updateStmt = $this->connection->prepare(
@@ -158,11 +160,11 @@ readonly class SqlEventStore implements EventStore
                 $recovered++;
             }
 
-            $this->commitIfStarted($startedTransaction);
+            $this->connection->commit();
 
             return $recovered;
         } catch (Throwable $e) {
-            $this->rollBackIfStarted($startedTransaction);
+            $this->rollBackIfActive();
 
             throw $e;
         }
@@ -177,13 +179,13 @@ readonly class SqlEventStore implements EventStore
 
         $stmt = $this->connection->prepare(
             <<<SQL
-                SELECT id, name, status, payload, created_at, publish_at
-                    FROM event_outbox WHERE
-                        status = 'pending' AND
-                        publish_at <= :now
-                    ORDER BY publish_at
-                    LIMIT 1 {$lockClause}
-            SQL,
+                    SELECT id, name, status, payload, created_at, publish_at
+                        FROM event_outbox WHERE
+                            status = 'pending' AND
+                            publish_at <= :now
+                        ORDER BY publish_at
+                        LIMIT 1 {$lockClause}
+                SQL,
         );
 
         $stmt->execute([
@@ -200,9 +202,9 @@ readonly class SqlEventStore implements EventStore
     {
         $stmt = $this->connection->prepare(
             <<<SQL
-            INSERT INTO event_outbox_status (event_id, status, error_message, created_at)
-                VALUES (:event_id, :status, :error_message, :created_at)
-            SQL,
+                INSERT INTO event_outbox_status (event_id, status, error_message, created_at)
+                    VALUES (:event_id, :status, :error_message, :created_at)
+                SQL,
         );
 
         $stmt->execute([
@@ -213,27 +215,10 @@ readonly class SqlEventStore implements EventStore
         ]);
     }
 
-    private function beginTransactionIfNeeded(): bool
+    /** Guards against the implicit-commit case where a DDL statement closed the transaction before the failure. */
+    private function rollBackIfActive(): void
     {
         if ($this->connection->inTransaction()) {
-            return false;
-        }
-
-        $this->connection->beginTransaction();
-
-        return true;
-    }
-
-    private function commitIfStarted(bool $started): void
-    {
-        if ($started) {
-            $this->connection->commit();
-        }
-    }
-
-    private function rollBackIfStarted(bool $started): void
-    {
-        if ($started && $this->connection->inTransaction()) {
             $this->connection->rollBack();
         }
     }
@@ -259,9 +244,7 @@ readonly class SqlEventStore implements EventStore
 
     private function driverName(): string
     {
-        $driver = $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
-        assert(is_string($driver));
-
-        return $driver;
+        /** @var string */
+        return $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
     }
 }

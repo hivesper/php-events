@@ -18,11 +18,8 @@ class SqlEventStoreTest extends TestCase
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-        // SqlEventStore calls ensureOutboxSchema() in the constructor
         $this->store = new SqlEventStore($this->pdo);
     }
-
-    // ── next() ────────────────────────────────────────────────────────────────
 
     public function test_next_returns_null_when_store_is_empty(): void
     {
@@ -33,12 +30,10 @@ class SqlEventStoreTest extends TestCase
     {
         $event = self::createEvent('order.placed');
         $this->store->add($event);
-        $this->store->next(); // consumes it
+        $this->store->next();
 
         self::assertNull($this->store->next());
     }
-
-    // ── add() + next() ────────────────────────────────────────────────────────
 
     public function test_add_persists_an_event_that_next_can_retrieve(): void
     {
@@ -75,7 +70,7 @@ class SqlEventStoreTest extends TestCase
     public function test_next_marks_event_as_processed_so_it_is_not_returned_again(): void
     {
         $this->store->add(self::createEvent('order.placed'));
-        $this->store->next(); // marks as processed
+        $this->store->next();
 
         self::assertNull($this->store->next());
     }
@@ -128,28 +123,20 @@ class SqlEventStoreTest extends TestCase
     {
         $this->store->add(self::createEvent('order.placed'));
 
-        // A second store instance over the same DB sees the event as processed
         $anotherStore = new SqlEventStore($this->pdo);
         $first = $anotherStore->next();
 
         self::assertNotNull($first);
-
-        // Consuming it means a third retrieval should see nothing
         self::assertNull($anotherStore->next());
     }
 
-    // ── schema ────────────────────────────────────────────────────────────────
-
     public function test_schema_is_idempotent_across_multiple_instantiations(): void
     {
-        // Creating a second store on the same DB should not throw or recreate tables
         new SqlEventStore($this->pdo);
         new SqlEventStore($this->pdo);
 
         self::assertTrue(true);
     }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
      * @param array<string, mixed> $payload

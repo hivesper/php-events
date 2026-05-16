@@ -2,146 +2,30 @@
 
 namespace Vesper\Tool\Event\Infrastructure;
 
-use Closure;
 use Override;
-use RuntimeException;
-use Throwable;
-use Vesper\Tool\Event\EventHydrator;
+use Vesper\Tool\Event\Dispatch\ListenerDispatcher;
 use Vesper\Tool\Event\EventProcessor;
 use Vesper\Tool\Event\EventStore;
 use Vesper\Tool\Event\EventSubscriberMap;
-use Vesper\Tool\Event\HandlerResolver;
-use Vesper\Tool\Event\Infrastructure\Retry\NoRetryPolicy;
-use Vesper\Tool\Event\RawEvent;
-use Vesper\Tool\Event\RedeliveryRequest;
-use Vesper\Tool\Event\RedeliveryStore;
-use Vesper\Tool\Event\Retry\RetryPolicy;
+use Vesper\Tool\Event\Infrastructure\Dispatch\DefaultListenerDispatcher;
 
-class SequentialEventProcessor implements EventProcessor
+readonly class SequentialEventProcessor implements EventProcessor
 {
-    /**
-     * @param EventSubscriberMap<object>    $subscribers
-     * @param list<class-string<Throwable>> $ignoredExceptions
-     */
+    /** @param EventSubscriberMap<object> $subscribers */
     public function __construct(
-        private readonly EventSubscriberMap $subscribers,
-        private readonly HandlerResolver $resolver = new DefaultHandlerResolver(),
-        private readonly EventHydrator $hydrator = new JacksonHydrator(),
-        private readonly RetryPolicy $retryPolicy = new NoRetryPolicy(),
-        private readonly ?RedeliveryStore $redeliveryStore = null,
-        private readonly array $ignoredExceptions = [],
-    ) {
-    }
+        private EventSubscriberMap $subscribers,
+        private ListenerDispatcher $dispatcher = new DefaultListenerDispatcher(),
+    ) {}
 
     #[Override] public function process(EventStore $store): void
     {
         while ($event = $store->next()) {
             foreach ($this->subscribers->of($event->name) as $subscriber) {
-                $this->dispatch($event, $subscriber);
-            }
-            $store->markProcessed($event->id);
-        }
-    }
-
-    public function processNextRedelivery(): void
-    {
-        if ($this->redeliveryStore === null) {
-            return;
-        }
-
-        $due = $this->redeliveryStore->next();
-
-        if ($due === null) {
-            return;
-        }
-
-        $subscriber = $this->findRegisteredSubscriber($due->event->name, $due->listener);
-
-        if ($subscriber === null) {
-            $this->redeliveryStore->markFailedPermanently(
-                $due->event->id,
-                $due->listener,
-                new RuntimeException("Listener '{$due->listener}' is no longer registered for event '{$due->event->name}'."),
-            );
-            return;
-        }
-
-        $this->dispatch($due->event, $subscriber, $due->attemptNumber);
-    }
-
-    private function findRegisteredSubscriber(string $eventName, string $listenerKey): callable|string|null
-    {
-        foreach ($this->subscribers->of($eventName) as $subscriber) {
-            if ($this->listenerKey($subscriber) === $listenerKey) {
-                return $subscriber;
-            }
-        }
-        return null;
-    }
-
-    /** @param int $attemptsMade attempts already made (0 from process(), ≥1 from processNextRedelivery()) */
-    protected function dispatch(RawEvent $event, callable|string $subscriber, int $attemptsMade = 0): void
-    {
-        $callable = $this->resolver->resolve($subscriber);
-        $domainEvent = $this->hydrator->hydrate($event->name, $event->payload, $callable);
-        $listener = $this->listenerKey($subscriber);
-
-        try {
-            $callable($domainEvent);
-            $this->redeliveryStore?->markSucceeded($event->id, $listener);
-        } catch (Throwable $e) {
-            if ($this->isIgnored($e)) {
-                return;
+                $this->dispatcher->dispatch($event, $subscriber);
             }
 
-            $attemptsMade++;
-            $nextRetryAt = $this->retryPolicy->nextRetryAt($attemptsMade);
-
-            if ($nextRetryAt === null) {
-                $this->onPermanentFailure($event, $subscriber, $e);
-                throw $e;
-            }
-
-            if ($this->redeliveryStore === null) {
-                throw $e;
-            }
-
-            $this->redeliveryStore->schedule(new RedeliveryRequest(
-                event: $event,
-                listener: $listener,
-                attemptNumber: $attemptsMade,
-                nextRetryAt: $nextRetryAt,
-                lastError: $e,
-            ));
+            $event->markProcessed();
+            $store->markProcessed($event);
         }
-    }
-
-    /** Hook for subclasses; called once a listener's failure can no longer be retried. */
-    protected function onPermanentFailure(RawEvent $event, callable|string $subscriber, Throwable $error): void
-    {
-        $this->redeliveryStore?->markFailedPermanently($event->id, $this->listenerKey($subscriber), $error);
-    }
-
-    protected function listenerKey(callable|string $subscriber): string
-    {
-        if (is_string($subscriber)) {
-            return $subscriber;
-        }
-
-        if (is_object($subscriber) && !($subscriber instanceof Closure)) {
-            return $subscriber::class;
-        }
-
-        return 'Closure';
-    }
-
-    private function isIgnored(Throwable $error): bool
-    {
-        foreach ($this->ignoredExceptions as $class) {
-            if ($error instanceof $class) {
-                return true;
-            }
-        }
-        return false;
     }
 }

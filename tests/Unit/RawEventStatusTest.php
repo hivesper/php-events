@@ -5,7 +5,7 @@ namespace Test\Vesper\Tool\Event\Unit;
 use PHPUnit\Framework\TestCase;
 use Vesper\Tool\Event\RawEventStatus;
 
-class RayEventStatusTest extends TestCase
+class RawEventStatusTest extends TestCase
 {
     public function test_has_pending_case(): void
     {

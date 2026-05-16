@@ -30,10 +30,12 @@ There's no first-class way to observe queue depth, dispatch latency, retry
 rates, or recovered-stuck-event counts. Users have to write their own SQL or
 wrap the processor.
 
-**Likely shape:** a small `EventProcessorObserver` interface with hooks like
-`onDispatched`, `onScheduledForRetry`, `onPermanentlyFailed`, `onRecovered`.
-Default no-op implementation; users plug in StatsD / OpenTelemetry /
-Prometheus / whatever from there.
+**Likely shape:** a metering decorator on `ListenerDispatcher` (records
+dispatch counts and latency per listener) and one on `EventProcessor` /
+`RedeliveryProcessor` (records batch size and duration). Same composition
+pattern as `SilentEventProcessor` and `RedeliveringListenerDispatcher` — no
+new interface needed. Users plug StatsD / OpenTelemetry / Prometheus
+backends in from there.
 
 **Trigger:** first time an oncall needs to answer "is the outbox keeping up?"
 and there's no dashboard.
@@ -65,16 +67,21 @@ redelivery claim) won't backfill existing installations.
 
 These matter once volume grows past a single moderate-sized service.
 
-### Batch redelivery
+### Batch claim and update
 
-`processNextRedelivery()` drains one row per call. For a backlog of 10k
-retries, that's 10k separate transactions and lock acquisitions.
+Both `SqlEventStore::next()` and `SqlRedeliveryStore::next()` claim one row
+per call inside their own transaction; `markProcessed()` and
+`update()` each write back in their own transaction too. The processor loops
+internally until empty, so 10k due rows means ~20k tiny transactions per
+worker pass.
 
-**Likely shape:** `processDueRedeliveries(int $batchSize): int` that wraps a
-configurable number of dispatches in one transaction (or one transaction per
-row but in a tight loop, sharing the connection).
+**Likely shape:** `next(int $batchSize): list<RawEvent>` / `list<Redelivery>`
+that claim N rows in one transaction, and a matching batched write-back. The
+processor loop becomes "claim batch, dispatch each, write batch back."
 
-**Trigger:** first time the cron task can't keep up at its current cadence.
+**Trigger:** first time a worker can't drain the queue at its current
+cadence, or first time the per-transaction overhead shows up in DB load
+graphs.
 
 ### Per-aggregate ordering
 

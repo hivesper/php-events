@@ -12,10 +12,10 @@ Events are first written to a durable store (in-memory or SQL), then dispatched 
 - **Subscribe** to event types with any callable
 - **Process** queued events sequentially — each event is routed to every registered subscriber by type
 - **Two stores out of the box** — in-memory for tests/dev, SQL (MySQL / SQLite) for production
-- **Two processors out of the box** — standard (fail-fast for local/CI) and silent (log-and-continue for production)
+- **Composable dispatch** — a `ListenerDispatcher` interface with a default void+throw implementation and a redelivering decorator that catches failures and writes them to a `RedeliveryStore`
 - **Outbox pattern** — events transition `pending → processing → processed`, with the intermediate state surviving worker crashes
-- **Per-listener retries** — configurable `RetryPolicy` plus a persisted `RedeliveryStore`; a single failing listener of an event is retried independently while the others continue
-- **Ignored exceptions** — pass a list of `Throwable` classes to silently swallow expected domain failures (no retry, no log, no DB row)
+- **Per-listener retries** — failures persist to a `RedeliveryStore` and the `SequentialRedeliveryProcessor` consults a configurable `RetryPolicy` to decide whether and when to retry; a single failing listener of an event is retried independently while the others continue
+- **Ignored exceptions** — pass a list of `Throwable` classes to the dispatcher to silently swallow expected domain failures (no retry, no log, no DB row)
 - **Status audit trail** — every event status transition is recorded in `event_outbox_status` for ops visibility
 - **Scheduled delivery** — set `publishAt` in the future; the processor only picks up events whose time has come
 - **Worker-safe** — MySQL store uses `FOR UPDATE SKIP LOCKED` to allow multiple workers without double-processing
@@ -57,15 +57,21 @@ composer require hivesper/php-events
 | `SerializedEvent` | Value object holding the event `name` and `payload` array |
 | `EventPublisher` | Serializes a domain event and pushes it into the store, returning its ID |
 | `EventSubscriberMap` | Registry of `name → callable[]` mappings |
-| `EventProcessor` | Interface — drains the store and dispatches to subscribers |
-| `SequentialEventProcessor` | Built-in processor — dispatches events one by one with optional retry policy; exceptions propagate after retries are exhausted (fail-fast). Call `processNextRedelivery()` in a separate scheduled job to pick up persisted retries. |
-| `SilentSequentialEventProcessor` | Same as above but catches per-listener failures after retries are exhausted, logs them via PSR-3, and continues |
+| `EventProcessor` | Interface — drains an `EventStore` and dispatches each event to its subscribers |
+| `SequentialEventProcessor` | Built-in event processor — runs each subscriber via the supplied `ListenerDispatcher` and calls `markProcessed`. Anything the dispatcher throws propagates out (fail-fast for local/CI); use `RedeliveringListenerDispatcher` to route failures into a `RedeliveryStore` instead. |
+| `SilentEventProcessor` | Decorator — wraps any `EventProcessor` and logs (via PSR-3) any `Throwable` that escapes `process()` instead of letting it propagate. Use in production around the whole batch. |
+| `ListenerDispatcher` | Interface — invokes one (subscriber, event) pair. Returns `void`; lets the listener exception propagate. |
+| `DefaultListenerDispatcher` | Built-in — resolves the handler, hydrates the payload, calls the listener. Swallows exceptions listed in `ignoredExceptions`; otherwise rethrows. Stateless and side-effect-free. |
+| `RedeliveringListenerDispatcher` | Decorator — wraps any `ListenerDispatcher` and on a throw schedules a fresh row in the `RedeliveryStore` (attempt 1, retry-now). Used by the event-processing flow only — the redelivery processor must run a plain dispatcher to avoid double-scheduling. |
+| `RedeliveryProcessor` | Interface — drains a `RedeliveryStore`, mirroring `EventProcessor::process()` |
+| `SequentialRedeliveryProcessor` | Built-in redelivery processor — owns the `RetryPolicy` and decides per due row whether to reschedule, mark succeeded, or mark failed permanently |
+| `SilentRedeliveryProcessor` | Decorator — same shape as `SilentEventProcessor` but for `RedeliveryProcessor`. |
 | `EventSubscriberBuilder` | Fluent builder that produces a ready-to-use `EventSubscriberMap` |
-| `RetryPolicy` | Interface — decides whether and when to retry a failed listener |
+| `RetryPolicy` | Interface — decides whether and when to retry a failed listener (consulted only by the redelivery processor) |
 | `NoRetryPolicy` | Default — never retries |
 | `ExponentialBackoffRetryPolicy` | Built-in — five attempts with `100ms / 500ms / 1min / 5min` backoff |
 | `RedeliveryStore` | Interface — persists per-(event, listener) retry state and exposes `retryNow()` for admin tooling |
-| `InMemoryRedeliveryStore` / `SqlRedeliveryStore` | Tracker implementations |
+| `InMemoryRedeliveryStore` / `SqlRedeliveryStore` | `RedeliveryStore` implementations |
 
 ---
 
@@ -123,8 +129,8 @@ mostly-disjoint tables and rows, so they can run in parallel without contending.
 
 | Job | Recommended cadence | What it does |
 |---|---|---|
-| `$processor->process($eventStore)` | Every minute, or on demand after a business write | Drains all currently-pending events from `event_outbox` and dispatches each to its listeners. Loops internally until empty. See [Running your own processor](#running-your-own-processor). |
-| `$processor->processNextRedelivery()` | Every minute, looped per tick to drain a batch | Claims one due retry from `event_outbox_redelivery` (transitions it to `dispatching`) and dispatches it. Loop the call within a single tick if you want to drain multiple. See [Automatic retry & failure tracking](#automatic-retry--failure-tracking). |
+| `$eventProcessor->process($eventStore)` | Every minute, or on demand after a business write | Drains all currently-pending events from `event_outbox` and dispatches each to its listeners. Loops internally until empty. See [Running your own processor](#running-your-own-processor). |
+| `$redeliveryProcessor->process($redeliveryStore)` | Every minute | Drains all currently-due retries from `event_outbox_redelivery` (transitions each to `dispatching` and back). Loops internally until empty. See [Automatic retry & failure tracking](#automatic-retry--failure-tracking). |
 | `$eventStore->recoverStuckEvents(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox` rows wedged in `processing` (worker crash victims) back to `pending`. Threshold should be comfortably longer than your longest healthy dispatch — see [Recovering stuck events](#recovering-stuck-events). |
 | `$redeliveryStore->recoverStuckRedeliveries(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox_redelivery` rows wedged in `dispatching` (worker crash victims) back to `pending_retry`. Same threshold guidance as above. |
 
@@ -133,8 +139,8 @@ mostly-disjoint tables and rows, so they can run in parallel without contending.
 
 The four jobs do not compete for the same rows:
 
-- `process()` reads `event_outbox` rows in `pending`; `recoverStuckEvents()` reads rows in `processing` — disjoint by status filter.
-- `processNextRedelivery()` reads `event_outbox_redelivery` rows in `pending_retry` and claims by transitioning to `dispatching`; `recoverStuckRedeliveries()` reads rows in `dispatching` — disjoint by status filter.
+- `EventProcessor::process()` reads `event_outbox` rows in `pending`; `recoverStuckEvents()` reads rows in `processing` — disjoint by status filter.
+- `RedeliveryProcessor::process()` reads `event_outbox_redelivery` rows in `pending_retry` and claims by transitioning to `dispatching`; `recoverStuckRedeliveries()` reads rows in `dispatching` — disjoint by status filter.
 - The redelivery and event tables are separate.
 - The lock from `SELECT ... FOR UPDATE SKIP LOCKED` is held through each claim, so concurrent workers running the same job never claim the same row either.
 
@@ -245,7 +251,7 @@ final class AppEventSerializer implements EventSerializer
 
 ## EventHydrator
 
-`EventHydrator` reconstructs a domain event object from the stored `name` and `payload`. `SequentialEventProcessor` calls it once per subscriber, passing the subscriber as the third argument so the hydrator can resolve a different type for each listener.
+`EventHydrator` reconstructs a domain event object from the stored `name` and `payload`. `DefaultListenerDispatcher` calls it once per subscriber, passing the subscriber as the third argument so the hydrator can resolve a different type for each listener.
 
 ```php
 interface EventHydrator
@@ -309,7 +315,10 @@ $subscribers->subscribe('order.placed', function (OrderPlaced $event): void {
     echo "Order placed: " . $event->orderId . PHP_EOL;
 });
 
-$processor = new SequentialEventProcessor($subscribers, hydrator: new AppEventHydrator());
+$processor = new SequentialEventProcessor(
+    $subscribers,
+    new DefaultListenerDispatcher(hydrator: new AppEventHydrator()),
+);
 ```
 
 ---
@@ -523,33 +532,54 @@ class MyEventStore implements EventStore
 
 ---
 
-## Silent event processing
+## Fail-fast in dev, durable in prod
 
-In local development and CI, letting a failing listener throw immediately is exactly what you want — fast, noisy feedback. In production the calculus is different: a single listener failure should not prevent the remaining listeners for that event from running, nor should it block every subsequent event in the queue. `SilentSequentialEventProcessor` wraps each listener dispatch in a try-catch, logs the failure, and carries on.
+In local development and CI, letting a failing listener throw immediately is exactly what you want — fast, noisy feedback. In production the calculus is different: a single listener failure should not prevent the remaining listeners from running, nor should an infrastructure blip (a DB hiccup, a connection drop) leave the worker dead.
+
+The library separates those concerns into two composable layers:
+
+- **`RedeliveringListenerDispatcher`** — a decorator on the dispatcher. Catches a listener throw and writes a fresh row to the `RedeliveryStore`, so the failure is durable but the rest of the event's listeners still run.
+- **`SilentEventProcessor`** / **`SilentRedeliveryProcessor`** — decorators on the processor. Catch anything that escapes `process()` (infra-level failures, the redelivery store's own writes failing, etc.) and log via PSR-3.
+
+In dev, you skip both decorators — anything that goes wrong propagates to the call site. In prod, you compose them.
 
 ```php
-use Tcds\Io\Raw\Infrastructure\SilentSequentialEventProcessor;
-
-$processor = new SilentSequentialEventProcessor($subscribers, $logger);
+// Dev / CI — listener throws propagate out of process()
+$processor = new SequentialEventProcessor($subscribers); // DefaultListenerDispatcher by default
 $processor->process($store);
 ```
 
-Each failure produces exactly one log entry per event–listener pair, so nothing is silently swallowed. Every exception is recorded with enough context to diagnose and replay the specific listener later:
+```php
+// Production — listener throws become redelivery rows; infra throws get logged
+use Vesper\Tool\Event\Infrastructure\Dispatch\DefaultListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\Dispatch\RedeliveringListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
+use Vesper\Tool\Event\Infrastructure\SilentEventProcessor;
+
+$dispatcher = new RedeliveringListenerDispatcher(
+    new DefaultListenerDispatcher(),
+    $redeliveryStore,
+);
+
+$processor = new SilentEventProcessor(
+    new SequentialEventProcessor($subscribers, $dispatcher),
+    $logger,
+);
+$processor->process($store);
+```
+
+The silent decorator logs each escape with the throwable attached so you can diagnose what aborted the batch:
 
 ```
-Failed to dispatch event to listener.
-{
-    event:     "order.placed"
-    event_id:  "019612a3-..."
-    listener:  "App\Listeners\SendConfirmationEmail"  // or "Closure"
-    attempt:   3                                       // the attempt that just failed; 1 if no retry policy
-    exception: RuntimeException: ...
-}
+Event processor aborted.
+{ exception: RuntimeException: ... }
 ```
+
+(`SilentRedeliveryProcessor` logs `Redelivery processor aborted.` in the same shape.) Per-listener failures are caught one layer down by `RedeliveringListenerDispatcher` and don't pass through the silent decorator at all.
 
 ### PSR-3 logger
 
-`SilentSequentialEventProcessor` accepts any [PSR-3](https://www.php-fig.org/psr/psr-3/) `LoggerInterface`. vesper php-events ships no concrete logger — supply whichever one your application already uses:
+The silent decorators accept any [PSR-3](https://www.php-fig.org/psr/psr-3/) `LoggerInterface`. vesper php-events ships no concrete logger — supply whichever one your application already uses:
 
 ```php
 // Monolog
@@ -559,24 +589,26 @@ use Monolog\Handler\StreamHandler;
 $logger = new Logger('events');
 $logger->pushHandler(new StreamHandler('php://stderr'));
 
-$processor = new SilentSequentialEventProcessor($subscribers, $logger);
+$processor = new SilentEventProcessor(
+    new SequentialEventProcessor($subscribers, $dispatcher),
+    $logger,
+);
 ```
 
 ```php
 // Laravel (already PSR-3 compatible)
-$processor = new SilentSequentialEventProcessor($subscribers, app('log'));
+$processor = new SilentEventProcessor(
+    new SequentialEventProcessor($subscribers, $dispatcher),
+    app('log'),
+);
 ```
 
-### Choosing a processor per environment
+### Choosing a wiring per environment
 
-| Environment | Processor | Behaviour |
+| Environment | Wiring | Behaviour |
 |---|---|---|
-| Local / CI | `SequentialEventProcessor` | Any listener exception propagates immediately — nothing is hidden |
-| Production | `SilentSequentialEventProcessor` | A failing listener is logged and skipped; all other listeners and subsequent events continue processing |
-
-Both processors support [Automatic retry & failure tracking](#automatic-retry--failure-tracking)
-through the same constructor parameters. The retry policy and the redelivery tracker are opt-in:
-default behaviour for both processors is unchanged from earlier versions.
+| Local / CI | `SequentialEventProcessor` + `DefaultListenerDispatcher` | A listener throw propagates out of `process()`. Nothing is hidden. |
+| Production | `SilentEventProcessor` wrapping `SequentialEventProcessor`, dispatcher = `RedeliveringListenerDispatcher(DefaultListenerDispatcher, $redeliveryStore)` | A listener throw is written to `event_outbox_redelivery` and the next listener runs. Anything else (DB blip, etc.) is logged and the batch aborts; the next scheduled tick picks it up. |
 
 ---
 
@@ -587,18 +619,22 @@ durable failure tracking on a **per-(event, listener)** basis: if a single liste
 fails, only that listener is retried — the others continue to run and successful deliveries are
 not re-fired.
 
-The model is **fully async**: when a listener fails, the failure is persisted to the redelivery
-table immediately and the main outbox worker moves on to the next event. A separate scheduled
-job calls `processNextRedelivery()` to pick up due retries — the retry policy is consulted at
-that point to decide whether to re-schedule or mark permanently failed.
+The model is **fully async**: when a listener throws inside `SequentialEventProcessor`, the
+`RedeliveringListenerDispatcher` catches the exception and persists it to the redelivery table
+immediately (with `attempt_number = 1` and `next_retry_at = now`); the main outbox worker then
+moves on to the next listener / next event. A separate scheduled job runs
+`SequentialRedeliveryProcessor::process()`, which drains the redelivery table and consults the
+`RetryPolicy` per failed attempt to decide whether to reschedule or mark the row permanently
+failed.
 
-Once configured, the same retry behaviour applies to both `SequentialEventProcessor` (which
-fails fast on the first attempt when no tracker is configured, or after `nextRetryAt` returns
-null on a retry) and `SilentSequentialEventProcessor` (which logs and continues).
+The split keeps the event processor simple — it knows nothing about the redelivery store,
+retry policies, attempt counts, or permanent failure. The dispatcher decorator owns
+"failure → row"; the redelivery processor owns "row → retry decision".
 
 ### Retry policy
 
-A `RetryPolicy` decides whether a failed dispatch should be retried, and at what time:
+A `RetryPolicy` decides whether a failed dispatch should be retried, and at what time. It is
+consulted only by `SequentialRedeliveryProcessor`, not by the event processor:
 
 ```php
 use Vesper\Tool\Event\Retry\RetryPolicy;
@@ -612,11 +648,11 @@ interface RetryPolicy
 
 Two implementations ship out of the box:
 
-- **`NoRetryPolicy`** *(default)* — never retries. Same behaviour as before this feature existed,
-  so wiring up the new processor parameters without choosing a policy is a no-op.
+- **`NoRetryPolicy`** *(default)* — never retries. The first redelivery attempt that fails is
+  marked permanently failed.
 - **`ExponentialBackoffRetryPolicy`** — five total attempts (one initial + four retries) with
-  delays of `100ms, 500ms, 1min, 5min` by default. Every retry is persisted to the redelivery
-  table and picked up on a future `processNextRedelivery()` run.
+  delays of `100ms, 500ms, 1min, 5min` by default. Every retry is persisted back to the
+  redelivery table and picked up on a future `RedeliveryProcessor::process()` run.
 
 ```php
 use Vesper\Tool\Event\Infrastructure\Retry\ExponentialBackoffRetryPolicy;
@@ -628,11 +664,11 @@ $retryPolicy = new ExponentialBackoffRetryPolicy();
 $retryPolicy = new ExponentialBackoffRetryPolicy(delaysMs: [50, 250, 1_000, 30_000]);
 ```
 
-Retries require a `RedeliveryStore` to be configured — without one, any failure is treated
-as permanent and rethrown by `SequentialEventProcessor` (or logged and swallowed by
-`SilentSequentialEventProcessor`).
+Without a `RedeliveringListenerDispatcher` wrapping the dispatcher, any listener throw
+propagates out of `process()` (fail-fast) — there is nowhere to persist the failed attempt.
+Wrap the dispatcher to enable durable retry.
 
-### Redelivery tracker
+### Redelivery store
 
 The `RedeliveryStore` interface owns per-listener retry state — when an attempt failed, how
 many attempts have been made, when the next one should run, what the last error was. Two
@@ -644,44 +680,66 @@ implementations:
   on MySQL.
 
 ```php
-use Vesper\Tool\Event\Infrastructure\SqlRedeliveryStore;
+use Vesper\Tool\Event\Infrastructure\Redelivery\SqlRedeliveryStore;
 
-$tracker = new SqlRedeliveryStore($pdo); // schema created here if not present
+$store = new SqlRedeliveryStore($pdo); // schema created here if not present
 ```
 
-### Wiring a processor with retries
+### Wiring it together
 
 ```php
+use Vesper\Tool\Event\Infrastructure\Dispatch\DefaultListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\Dispatch\RedeliveringListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\Redelivery\SequentialRedeliveryProcessor;
+use Vesper\Tool\Event\Infrastructure\Redelivery\SilentRedeliveryProcessor;
+use Vesper\Tool\Event\Infrastructure\Redelivery\SqlRedeliveryStore;
 use Vesper\Tool\Event\Infrastructure\Retry\ExponentialBackoffRetryPolicy;
-use Vesper\Tool\Event\Infrastructure\SilentSequentialEventProcessor;
-use Vesper\Tool\Event\Infrastructure\SqlRedeliveryStore;
+use Vesper\Tool\Event\Infrastructure\SequentialEventProcessor;
+use Vesper\Tool\Event\Infrastructure\SilentEventProcessor;
 
-$processor = new SilentSequentialEventProcessor(
-    subscribers:        $subscribers,
-    logger:             $logger,
-    retryPolicy:        new ExponentialBackoffRetryPolicy(),
-    redeliveryStore:  new SqlRedeliveryStore($pdo),
-    ignoredExceptions:  [
+$default = new DefaultListenerDispatcher(
+    ignoredExceptions: [
         UserNotFoundException::class,
         InvalidPayloadException::class,
     ],
 );
 
-$processor->process($store);
+$redeliveryStore = new SqlRedeliveryStore($pdo);
+
+// Event flow: failures route into $redeliveryStore via the dispatcher decorator;
+// anything else that escapes the batch is logged by SilentEventProcessor.
+$eventProcessor = new SilentEventProcessor(
+    new SequentialEventProcessor(
+        $subscribers,
+        new RedeliveringListenerDispatcher($default, $redeliveryStore),
+    ),
+    $logger,
+);
+
+// Redelivery flow: plain dispatcher (no Redelivering wrap — that would double-schedule).
+// The retry policy decides whether each failed attempt reschedules or marks failed.
+$redeliveryProcessor = new SilentRedeliveryProcessor(
+    new SequentialRedeliveryProcessor(
+        $subscribers,
+        $default,
+        new ExponentialBackoffRetryPolicy(),
+    ),
+    $logger,
+);
 ```
 
-`process()` drains the pending outbox and dispatches each event to its listeners.
-
-Redeliveries are processed separately — call `processNextRedelivery()` in its own scheduled
-job. It picks up one due retry using the same `FOR UPDATE SKIP LOCKED` strategy as `next()`:
+Run the two processors as separate scheduled jobs:
 
 ```php
-// In a separate cron task / queue worker:
-$processor->processNextRedelivery(); // picks up the next due retry, if any
+// In one cron task / queue worker:
+$eventProcessor->process($eventStore);
+
+// In another cron task / queue worker:
+$redeliveryProcessor->process($redeliveryStore);
 ```
 
 Long backoffs (e.g. the default 1min / 5min steps) won't be picked up until a future
-`processNextRedelivery()` call after their `next_retry_at` passes — which is exactly how
+`RedeliveryProcessor::process()` call after their `next_retry_at` passes — which is exactly how
 outbox workers already poll on a schedule.
 
 ### Ignored exceptions (skip-list)
@@ -690,15 +748,17 @@ Some listener failures are not bugs — they're expected domain outcomes that th
 already handles upstream (e.g. `UserNotFoundException`, `OrderAlreadyShipped`). Retrying them
 wastes time and reporting them spams the error tracker.
 
-The `ignoredExceptions` constructor parameter takes a list of `Throwable` class-strings.
-Matching is `instanceof`-based, so subclasses are also matched. When a listener throws an
-ignored exception:
+The `ignoredExceptions` constructor parameter on `DefaultListenerDispatcher` takes a list of
+`Throwable` class-strings. Matching is `instanceof`-based, so subclasses are also matched. When
+a listener throws an ignored exception the dispatcher swallows it and returns normally —
+indistinguishable to callers from a clean run:
 
-- **No retry attempt** — the policy is skipped entirely.
-- **No PSR-3 log line** (in `SilentSequentialEventProcessor`).
-- **No row written to `event_outbox_redelivery`.**
-- **No exception propagation** in `SequentialEventProcessor` either — this is treated as
-  silent success, the next listener for the same event runs as normal.
+- **No retry attempt** — `RedeliveringListenerDispatcher` only catches throws that propagate
+  past `DefaultListenerDispatcher`, so ignored exceptions never reach the redelivery store.
+- **No PSR-3 log line** — nothing escaped the processor for `SilentEventProcessor` to log.
+- **No row written to `event_outbox_redelivery`** by the event flow.
+- **No exception propagation** — the next listener for the same event runs as normal.
+- **Marked succeeded** if encountered during redelivery — the listener has "handled" the event.
 
 The recommended pattern is to share the same list with whatever already configures your
 application's error reporter (Sentry/Bugsnag/etc.) so behaviour stays consistent across the
@@ -707,15 +767,15 @@ expected here.
 
 ### Permanently failed dispatches
 
-When a listener has exhausted its retries (or `nextRetryAt` returns `null` immediately because
-no retry policy is configured), it is recorded in `event_outbox_redelivery` with
-`status = 'failed'`. The row stays in the table so operators can inspect it. The behaviour
-differs slightly between processors:
+When `SequentialRedeliveryProcessor` runs a due retry and the `RetryPolicy` returns `null` (no
+more retries), the row is marked `status = 'failed'` in `event_outbox_redelivery`. The row
+stays in the table so operators can inspect it. The redelivery processor does **not** throw —
+the loop continues to the next due row.
 
-| Processor | On exhaustion |
-|---|---|
-| `SequentialEventProcessor` | Marks the row `failed`, then **rethrows** the original exception (fail-fast). The event row stays in `processing` — no `markProcessed()` is called. |
-| `SilentSequentialEventProcessor` | Marks the row `failed`, **logs** via PSR-3 (same shape as today), and **swallows** the exception so the next listener runs. The event eventually advances to `processed`. |
+The event processor itself never marks anything `failed`. The only path to a `failed` row is
+through the redelivery processor's retry-policy exhaustion. If you want fail-fast semantics in
+local/CI, simply omit the `RedeliveringListenerDispatcher` wrapper — listener throws will then
+propagate out of `process()` on the first attempt instead.
 
 ### Re-triggering a failed dispatch
 

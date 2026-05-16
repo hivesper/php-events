@@ -1,6 +1,6 @@
 <?php
 
-namespace Vesper\Tool\Event;
+namespace Vesper\Tool\Event\Redelivery;
 
 enum RedeliveryStatus: string
 {

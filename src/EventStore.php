@@ -14,5 +14,5 @@ interface EventStore
      */
     public function next(): ?RawEvent;
 
-    public function markProcessed(string $eventId): void;
+    public function markProcessed(RawEvent $event): void;
 }

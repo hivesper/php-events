@@ -7,6 +7,5 @@ readonly class OrderPlacedStub
     public function __construct(
         public int $orderId,
         public float $total,
-    ) {
-    }
+    ) {}
 }
