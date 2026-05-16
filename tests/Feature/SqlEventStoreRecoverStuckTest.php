@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterval;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
 use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 use Vesper\Tool\Event\RawEvent;
 
@@ -18,6 +19,8 @@ class SqlEventStoreRecoverStuckTest extends TestCase
     {
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        SqliteEventStoreSchema::create($this->pdo);
 
         $this->store = new SqlEventStore($this->pdo);
     }

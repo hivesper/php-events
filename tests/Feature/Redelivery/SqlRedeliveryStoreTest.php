@@ -9,6 +9,8 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Test\Vesper\Tool\Event\_Fixtures\TestEventFactory;
 use Vesper\Tool\Event\Infrastructure\Redelivery\SqlRedeliveryStore;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
+use Vesper\Tool\Event\Infrastructure\Schema\SqliteRedeliverySchema;
 use Vesper\Tool\Event\Infrastructure\SqlEventStore;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\Redelivery\Redelivery;
@@ -25,14 +27,17 @@ class SqlRedeliveryStoreTest extends TestCase
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
+        SqliteEventStoreSchema::create($this->pdo);
+        SqliteRedeliverySchema::create($this->pdo);
+
         $this->eventStore = new SqlEventStore($this->pdo);
         $this->store = new SqlRedeliveryStore($this->pdo);
     }
 
-    public function test_schema_is_idempotent_across_multiple_instantiations(): void
+    public function test_schema_create_is_idempotent(): void
     {
-        new SqlRedeliveryStore($this->pdo);
-        new SqlRedeliveryStore($this->pdo);
+        SqliteRedeliverySchema::create($this->pdo);
+        SqliteRedeliverySchema::create($this->pdo);
 
         self::assertTrue(true);
     }

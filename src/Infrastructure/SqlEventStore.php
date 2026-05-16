@@ -6,20 +6,14 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterval;
 use Override;
 use PDO;
-use RuntimeException;
 use Throwable;
 use Vesper\Tool\Event\EventStore;
-use Vesper\Tool\Event\Infrastructure\Schema\MysqlEventStoreSchema;
-use Vesper\Tool\Event\Infrastructure\Schema\SqliteEventStoreSchema;
 use Vesper\Tool\Event\RawEvent;
 use Vesper\Tool\Event\RawEventStatus;
 
 readonly class SqlEventStore implements EventStore
 {
-    public function __construct(private PDO $connection)
-    {
-        $this->ensureOutboxSchema();
-    }
+    public function __construct(private PDO $connection) {}
 
     #[Override]
     public function add(RawEvent $event): void
@@ -221,17 +215,6 @@ readonly class SqlEventStore implements EventStore
         if ($this->connection->inTransaction()) {
             $this->connection->rollBack();
         }
-    }
-
-    private function ensureOutboxSchema(): void
-    {
-        $driver = $this->driverName();
-
-        match ($driver) {
-            'mysql' => MysqlEventStoreSchema::create($this->connection),
-            'sqlite' => SqliteEventStoreSchema::create($this->connection),
-            default => throw new RuntimeException('Unsupported database driver: ' . $driver),
-        };
     }
 
     private function lockingClause(): string
