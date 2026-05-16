@@ -52,24 +52,6 @@ column on MySQL).
 
 **Trigger:** first post-mortem where a permanently-failed row is unreadable.
 
-### Schema migrations
-
-Initial-table installation is no longer automatic — host applications either
-run the shipped DDL templates (`migrations/{mysql,sqlite}/`) through their own
-migration tool, or call `Schema::create()` at boot. That covers v1 cleanly, but
-there's still no story for evolving the schema once it's live. Adding a column
-(e.g. `claimed_until` for a lease-based redelivery claim) needs ordered, idempotent
-ALTERs across every installation.
-
-**Likely shape:** ship each schema change as a new numbered file in `migrations/`
-(e.g. `0002_add_claimed_until.sql` per driver). Host migration tools pick up new
-files the same way they handled the initial create — one host migration per
-shipped file. For projects on the `Schema::create()` path, add an optional
-`Schema::migrate(PDO)` helper that tracks applied versions in a `schema_version`
-table and runs the same DDL files idempotently.
-
-**Trigger:** the first time we need to change an existing column.
-
 ## Scale concerns
 
 These matter once volume grows past a single moderate-sized service.
