@@ -129,6 +129,7 @@ readonly class SqlRedeliveryStore implements RedeliveryStore
      * when its updated_at is older than $olderThan. Returns the number of rows recovered.
      * Call from a separate scheduled job; safe to run alongside the redelivery worker.
      */
+    #[Override]
     public function recoverStuckRedeliveries(CarbonInterval $olderThan): int
     {
         $now = CarbonImmutable::now()->format('Y-m-d H:i:s.u');

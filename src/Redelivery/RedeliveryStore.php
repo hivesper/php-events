@@ -2,6 +2,8 @@
 
 namespace Vesper\Tool\Event\Redelivery;
 
+use Carbon\CarbonInterval;
+
 interface RedeliveryStore
 {
     /**
@@ -16,7 +18,7 @@ interface RedeliveryStore
      * Claim the next due redelivery, atomically transitioning it from pending_retry to
      * dispatching so concurrent workers cannot pick up the same row. Returns null when
      * nothing is due. A worker that dies before calling update() leaves the row in
-     * dispatching — call SqlRedeliveryStore::recoverStuckRedeliveries() from a separate
+     * dispatching — call RedeliveryStore::recoverStuckRedeliveries() from a separate
      * cron to recover it.
      */
     public function next(): ?Redelivery;
@@ -33,4 +35,7 @@ interface RedeliveryStore
      * is preserved, so the retry policy's max-attempts ceiling still applies.
      */
     public function retryNow(string $eventId, string $listener): void;
+
+    /** Resets redeliveries wedged in `dispatching` back to `pending_retry`; returns the count recovered. */
+    public function recoverStuckRedeliveries(CarbonInterval $olderThan): int;
 }

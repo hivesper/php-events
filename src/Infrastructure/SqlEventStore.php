@@ -110,6 +110,7 @@ readonly class SqlEventStore implements EventStore
      * transitions apart. Returns the number of events recovered. Call from a separate scheduled
      * job; safe to run alongside the main worker.
      */
+    #[Override]
     public function recoverStuckEvents(CarbonInterval $olderThan): int
     {
         $thresholdAt = CarbonImmutable::now()->sub($olderThan)->format('Y-m-d H:i:s.u');

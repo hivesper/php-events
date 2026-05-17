@@ -2,6 +2,7 @@
 
 namespace Test\Vesper\Tool\Event\_Fixtures;
 
+use Carbon\CarbonInterval;
 use Override;
 use Vesper\Tool\Event\EventStore;
 use Vesper\Tool\Event\RawEvent;
@@ -22,4 +23,9 @@ class CapturingEventStore implements EventStore
     }
 
     #[Override] public function markProcessed(RawEvent $event): void {}
+
+    #[Override] public function recoverStuckEvents(CarbonInterval $olderThan): int
+    {
+        return 0;
+    }
 }

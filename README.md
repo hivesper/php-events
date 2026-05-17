@@ -62,6 +62,7 @@ composer require hivesper/php-events
 | `SilentEventProcessor` | Decorator — wraps any `EventProcessor` and logs (via PSR-3) any `Throwable` that escapes `process()` instead of letting it propagate. Use in production around the whole batch. |
 | `ListenerDispatcher` | Interface — invokes one (subscriber, event) pair. Returns `void`; lets the listener exception propagate. |
 | `DefaultListenerDispatcher` | Built-in — resolves the handler, hydrates the payload, calls the listener. Swallows exceptions listed in `ignoredExceptions`; otherwise rethrows. Stateless and side-effect-free. |
+| `LoggingListenerDispatcher` | Decorator — wraps any `ListenerDispatcher` and on a throw logs at error level via PSR-3 (with the event name and listener key) then rethrows so upstream redelivery scheduling still triggers. Wrap **outside** `DefaultListenerDispatcher` so its `ignoredExceptions` never reach the logger. |
 | `RedeliveringListenerDispatcher` | Decorator — wraps any `ListenerDispatcher` and on a throw schedules a fresh row in the `RedeliveryStore` (attempt 1, retry-now). Used by the event-processing flow only — the redelivery processor must run a plain dispatcher to avoid double-scheduling. |
 | `RedeliveryProcessor` | Interface — drains a `RedeliveryStore`, mirroring `EventProcessor::process()` |
 | `SequentialRedeliveryProcessor` | Built-in redelivery processor — owns the `RetryPolicy` and decides per due row whether to reschedule, mark succeeded, or mark failed permanently |
@@ -134,8 +135,10 @@ mostly-disjoint tables and rows, so they can run in parallel without contending.
 | `$eventStore->recoverStuckEvents(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox` rows wedged in `processing` (worker crash victims) back to `pending`. Threshold should be comfortably longer than your longest healthy dispatch — see [Recovering stuck events](#recovering-stuck-events). |
 | `$redeliveryStore->recoverStuckRedeliveries(CarbonInterval::minutes(30))` | Every 5–15 minutes | Resets `event_outbox_redelivery` rows wedged in `dispatching` (worker crash victims) back to `pending_retry`. Same threshold guidance as above. |
 
-`recoverStuckEvents` and `recoverStuckRedeliveries` are SQL-specific (live on `SqlEventStore` /
-`SqlRedeliveryStore`). The other two work against any `EventStore` / `RedeliveryStore` implementation.
+`recoverStuckEvents` and `recoverStuckRedeliveries` live on the `EventStore` and
+`RedeliveryStore` interfaces, so recovery jobs can type-hint against the interface. Only the SQL
+implementations do meaningful work — `InMemoryEventStore::recoverStuckEvents()` returns `0`
+(there is no persisted `processing` state to recover from).
 
 The four jobs do not compete for the same rows:
 
@@ -409,12 +412,12 @@ The processor advances each event through three states:
 If a worker dies between `next()` and `markProcessed()`, the row stays in `processing` —
 intentionally. Any redelivery rows that *did* get persisted before the crash remain durable, so
 listener-level retries still fire when their time comes. To recover the wedged `processing` row
-itself, call `SqlEventStore::recoverStuckEvents()` from a separate scheduled job (see
+itself, call `EventStore::recoverStuckEvents()` from a separate scheduled job (see
 [Recovering stuck events](#recovering-stuck-events) below).
 
 ### Recovering stuck events
 
-`SqlEventStore::recoverStuckEvents(CarbonInterval $olderThan): int` resets events that are stuck
+`EventStore::recoverStuckEvents(CarbonInterval $olderThan): int` resets events that are stuck
 in `processing` back to `pending` so the next worker can claim them again. An event is "stuck"
 when its most recent `processing` audit row is older than `$olderThan`. The recovery writes a
 `pending` audit row tagged `Recovered from stuck processing state` so dashboards can distinguish
@@ -439,7 +442,7 @@ unnecessary work is unnecessary work.
 ### Recovering stuck redeliveries
 
 The same shape applies to the redelivery table:
-`SqlRedeliveryStore::recoverStuckRedeliveries(CarbonInterval $olderThan): int` resets rows
+`RedeliveryStore::recoverStuckRedeliveries(CarbonInterval $olderThan): int` resets rows
 wedged in `dispatching` back to `pending_retry` so a worker can claim them again on the next
 `processNextRedelivery()` tick. A row is "stuck" when its `updated_at` is older than `$olderThan`.
 
@@ -535,19 +538,17 @@ class MyProcessor implements EventProcessor
 
 ### Custom EventStore
 
-If you implement your own `EventStore`, you need to satisfy the new `markProcessed()` method
-alongside `add()` and `next()`. For an in-memory or queue-style store with no persisted status,
-this is a one-liner:
+If you implement your own `EventStore`, you need to satisfy `add()`, `next()`, `markProcessed()`,
+and `recoverStuckEvents()`. For an in-memory or queue-style store with no persisted `processing`
+status, the last two collapse to no-ops:
 
 ```php
 class MyEventStore implements EventStore
 {
-    public function add(RawEvent $event): void { /* ... */ }
-    public function next(): ?RawEvent           { /* ... */ }
-    public function markProcessed(string $eventId): void
-    {
-        // No-op when there's no persisted status to flip.
-    }
+    public function add(RawEvent $event): void                          { /* ... */ }
+    public function next(): ?RawEvent                                   { /* ... */ }
+    public function markProcessed(RawEvent $event): void                { /* No-op when there's no persisted status to flip. */ }
+    public function recoverStuckEvents(CarbonInterval $olderThan): int  { return 0; /* No rows to recover when there's no `processing` state. */ }
 }
 ```
 
@@ -630,6 +631,39 @@ $processor = new SilentEventProcessor(
 |---|---|---|
 | Local / CI | `SequentialEventProcessor` + `DefaultListenerDispatcher` | A listener throw propagates out of `process()`. Nothing is hidden. |
 | Production | `SilentEventProcessor` wrapping `SequentialEventProcessor`, dispatcher = `RedeliveringListenerDispatcher(DefaultListenerDispatcher, $redeliveryStore)` | A listener throw is written to `event_outbox_redelivery` and the next listener runs. Anything else (DB blip, etc.) is logged and the batch aborts; the next scheduled tick picks it up. |
+
+### Per-attempt failure logging
+
+`SequentialRedeliveryProcessor` exhausts retries silently — when the `RetryPolicy` returns
+`null`, the row moves to `failed` with `last_error` set, but nothing is logged. To get
+per-attempt visibility, wrap the inner dispatcher in `LoggingListenerDispatcher`. It logs every
+failed dispatch at error level via PSR-3 with `['exception', 'event', 'listener']` context and
+**rethrows**, so upstream redelivery scheduling/rescheduling still fires.
+
+Wrap it **outside** `DefaultListenerDispatcher` so its `ignoredExceptions` never reach the
+logger, and **inside** `RedeliveringListenerDispatcher` (event path) /
+`SequentialRedeliveryProcessor` (redelivery path) so every attempt is logged:
+
+```php
+use Vesper\Tool\Event\Infrastructure\Dispatch\DefaultListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\Dispatch\LoggingListenerDispatcher;
+use Vesper\Tool\Event\Infrastructure\Dispatch\RedeliveringListenerDispatcher;
+
+$logged = new LoggingListenerDispatcher(new DefaultListenerDispatcher(), $logger);
+
+// Event path: log + persist failure as a redelivery row.
+$eventDispatcher = new RedeliveringListenerDispatcher($logged, $redeliveryStore);
+
+// Redelivery path: pass $logged directly — the redelivery processor handles reschedule/fail.
+$redeliveryProcessor = new SequentialRedeliveryProcessor(
+    $subscribers,
+    $logged,
+    new ExponentialBackoffRetryPolicy(),
+);
+```
+
+With exponential backoff and a deduplicating log backend, per-attempt log volume stays bounded
+while still giving a trail of differing errors across retries.
 
 ---
 
