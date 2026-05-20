@@ -374,7 +374,7 @@ CREATE TABLE event_outbox (
     publish_at DATETIME(6)  NOT NULL,
     INDEX idx_event_outbox_status_publish (status, publish_at),
     INDEX idx_event_outbox_created_at (created_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Audit trail: one row per event status transition (pending → processing → processed)
 CREATE TABLE event_outbox_status (
@@ -383,7 +383,7 @@ CREATE TABLE event_outbox_status (
     error_message TEXT,
     created_at    DATETIME(6)  NOT NULL,
     INDEX idx_event_outbox_status_event_created (event_id, created_at DESC)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 **Option 2 — call the shipped `Schema::create()` helper at boot.** Convenient for prototypes, single-app deployments, or projects without their own migration tool. The helper is idempotent (`CREATE … IF NOT EXISTS` on SQLite, `information_schema` check on MySQL), so it's safe to call on every boot — but be aware: if the host application also runs migrations, this can race with them. Prefer Option 1 in that case.

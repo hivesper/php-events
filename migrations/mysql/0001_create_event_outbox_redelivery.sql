@@ -11,4 +11,4 @@ CREATE TABLE event_outbox_redelivery (
     PRIMARY KEY (event_id, listener),
     INDEX idx_redelivery_due (status, next_retry_at),
     INDEX idx_redelivery_event_id (event_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

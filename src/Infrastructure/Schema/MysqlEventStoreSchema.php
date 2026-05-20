@@ -24,7 +24,7 @@ class MysqlEventStoreSchema
 
                         INDEX idx_event_outbox_status_publish (status, publish_at),
                         INDEX idx_event_outbox_created_at (created_at)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
                 SQL,
         );
 
@@ -39,7 +39,7 @@ class MysqlEventStoreSchema
                         created_at    DATETIME(6) NOT NULL,
 
                         INDEX idx_event_outbox_status_event_created (event_id, created_at DESC)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
                 SQL,
         );
     }
