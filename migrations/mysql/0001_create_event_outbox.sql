@@ -8,7 +8,7 @@ CREATE TABLE event_outbox (
 
     INDEX idx_event_outbox_status_publish (status, publish_at),
     INDEX idx_event_outbox_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE event_outbox_status (
     event_id      VARCHAR(36) NOT NULL,
@@ -17,4 +17,4 @@ CREATE TABLE event_outbox_status (
     created_at    DATETIME(6) NOT NULL,
 
     INDEX idx_event_outbox_status_event_created (event_id, created_at DESC)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
