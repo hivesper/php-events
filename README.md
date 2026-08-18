@@ -350,6 +350,30 @@ $store = new SqlEventStore($pdo);
 > MySQL workers use `SELECT … FOR UPDATE SKIP LOCKED` on the `event_outbox` table for safe
 > concurrent processing.
 
+#### Committing the event with the business change
+
+`add()` is meant to run inside the caller's transaction, so the event and the change it describes commit
+or roll back together. A fixed `PDO` cannot do that when the application opens its transaction on a
+different connection: the two are separate sessions, so the event commits immediately and a worker can
+pick it up before the business row exists — or keep it after that row rolls back.
+
+Pass a `Closure(): PDO` instead and the store resolves the connection on every call, joining whatever
+transaction is currently open:
+
+```php
+$store = new SqlEventStore(
+    fn(): PDO => $currentTransactionConnection() ?? $platformConnection,
+);
+```
+
+If the outbox tables live in a different schema from the connection doing the insert, name it — every
+statement is then qualified (`platform.event_outbox`). All schemas must be on the same server for a
+single session to write across them.
+
+```php
+$store = new SqlEventStore($connection, schema: 'platform');
+```
+
 If you wire up a `RedeliveryStore` (see [Automatic retry & failure tracking](#automatic-retry--failure-tracking)),
 a third table `event_outbox_redelivery` holds per-listener retry state — install it from the same `migrations/` directory.
 
