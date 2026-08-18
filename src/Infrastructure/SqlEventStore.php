@@ -4,6 +4,7 @@ namespace Vesper\Tool\Event\Infrastructure;
 
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterval;
+use Closure;
 use Override;
 use PDO;
 use Throwable;
@@ -13,14 +14,28 @@ use Vesper\Tool\Event\RawEventStatus;
 
 readonly class SqlEventStore implements EventStore
 {
-    public function __construct(private PDO $connection) {}
+    /**
+     * A closure is resolved on every call so add() can join whichever transaction the caller
+     * has open. Handing over a fixed PDO writes the event on a second session, which commits
+     * the event independently of the business change it describes.
+     *
+     * @param PDO|Closure(): PDO $connection
+     * @param string|null $schema Qualifies the outbox tables when they live outside the
+     *                            caller's default schema.
+     */
+    public function __construct(
+        private PDO|Closure $connection,
+        private ?string $schema = null,
+    ) {}
 
     #[Override]
     public function add(RawEvent $event): void
     {
-        $stmt = $this->connection->prepare(
+        $connection = $this->connection();
+
+        $stmt = $connection->prepare(
             <<<SQL
-                INSERT INTO event_outbox (id, name, status, payload, created_at, publish_at)
+                INSERT INTO {$this->table('event_outbox')} (id, name, status, payload, created_at, publish_at)
                     VALUES (:id, :name, :status, :payload, :created_at, :publish_at)
                 SQL,
         );
@@ -34,19 +49,21 @@ readonly class SqlEventStore implements EventStore
             'publish_at' => $event->publishAt->format('Y-m-d H:i:s.u'),
         ]);
 
-        $this->insertStatusAudit($event->id, $event->status->value);
+        $this->insertStatusAudit($connection, $event->id, $event->status->value);
     }
 
     #[Override]
     public function next(): ?RawEvent
     {
-        $this->connection->beginTransaction();
+        $connection = $this->connection();
+
+        $connection->beginTransaction();
 
         try {
-            $row = $this->fetchNextPendingRow();
+            $row = $this->fetchNextPendingRow($connection);
 
             if ($row === null) {
-                $this->connection->commit();
+                $connection->commit();
                 return null;
             }
 
@@ -62,17 +79,17 @@ readonly class SqlEventStore implements EventStore
                 publishAt: new CarbonImmutable($row['publish_at']),
             )->claim();
 
-            $this->connection->prepare(
-                "UPDATE event_outbox SET status = :status WHERE id = :id",
+            $connection->prepare(
+                "UPDATE {$this->table('event_outbox')} SET status = :status WHERE id = :id",
             )->execute(['status' => $event->status->value, 'id' => $event->id]);
 
-            $this->insertStatusAudit($event->id, $event->status->value);
+            $this->insertStatusAudit($connection, $event->id, $event->status->value);
 
-            $this->connection->commit();
+            $connection->commit();
 
             return $event;
         } catch (Throwable $e) {
-            $this->rollBackIfActive();
+            $this->rollBackIfActive($connection);
 
             throw $e;
         }
@@ -82,22 +99,24 @@ readonly class SqlEventStore implements EventStore
     #[Override]
     public function markProcessed(RawEvent $event): void
     {
-        $this->connection->beginTransaction();
+        $connection = $this->connection();
+
+        $connection->beginTransaction();
 
         try {
-            $this->connection->prepare(
+            $connection->prepare(
                 <<<SQL
-                    UPDATE event_outbox
+                    UPDATE {$this->table('event_outbox')}
                         SET status = :status
                         WHERE id = :id AND status = 'processing'
                     SQL,
             )->execute(['status' => $event->status->value, 'id' => $event->id]);
 
-            $this->insertStatusAudit($event->id, $event->status->value);
+            $this->insertStatusAudit($connection, $event->id, $event->status->value);
 
-            $this->connection->commit();
+            $connection->commit();
         } catch (Throwable $e) {
-            $this->rollBackIfActive();
+            $this->rollBackIfActive($connection);
 
             throw $e;
         }
@@ -113,14 +132,16 @@ readonly class SqlEventStore implements EventStore
     #[Override]
     public function recoverStuckEvents(CarbonInterval $olderThan): int
     {
+        $connection = $this->connection();
+
         $thresholdAt = CarbonImmutable::now()->sub($olderThan)->format('Y-m-d H:i:s.u');
 
-        $stmt = $this->connection->prepare(
+        $stmt = $connection->prepare(
             <<<SQL
-                    SELECT e.id FROM event_outbox e
+                    SELECT e.id FROM {$this->table('event_outbox')} e
                     WHERE e.status = 'processing'
                       AND NOT EXISTS (
-                        SELECT 1 FROM event_outbox_status s
+                        SELECT 1 FROM {$this->table('event_outbox_status')} s
                         WHERE s.event_id = e.id
                           AND s.status = 'processing'
                           AND s.created_at >= :threshold
@@ -136,11 +157,11 @@ readonly class SqlEventStore implements EventStore
             return 0;
         }
 
-        $this->connection->beginTransaction();
+        $connection->beginTransaction();
 
         try {
-            $updateStmt = $this->connection->prepare(
-                "UPDATE event_outbox SET status = 'pending' WHERE id = :id AND status = 'processing'",
+            $updateStmt = $connection->prepare(
+                "UPDATE {$this->table('event_outbox')} SET status = 'pending' WHERE id = :id AND status = 'processing'",
             );
 
             $recovered = 0;
@@ -151,31 +172,43 @@ readonly class SqlEventStore implements EventStore
                     continue;
                 }
 
-                $this->insertStatusAudit($id, RawEventStatus::pending->value, 'Recovered from stuck processing state');
+                $this->insertStatusAudit($connection, $id, RawEventStatus::pending->value, 'Recovered from stuck processing state');
                 $recovered++;
             }
 
-            $this->connection->commit();
+            $connection->commit();
 
             return $recovered;
         } catch (Throwable $e) {
-            $this->rollBackIfActive();
+            $this->rollBackIfActive($connection);
 
             throw $e;
         }
     }
 
+    private function connection(): PDO
+    {
+        return $this->connection instanceof Closure
+            ? ($this->connection)()
+            : $this->connection;
+    }
+
+    private function table(string $name): string
+    {
+        return $this->schema === null ? $name : "{$this->schema}.{$name}";
+    }
+
     /**
      * @return array{id: string, name: string, status: string, payload: string, created_at: string, publish_at: string}|null
      */
-    private function fetchNextPendingRow(): ?array
+    private function fetchNextPendingRow(PDO $connection): ?array
     {
-        $lockClause = $this->lockingClause();
+        $lockClause = $this->lockingClause($connection);
 
-        $stmt = $this->connection->prepare(
+        $stmt = $connection->prepare(
             <<<SQL
                     SELECT id, name, status, payload, created_at, publish_at
-                        FROM event_outbox WHERE
+                        FROM {$this->table('event_outbox')} WHERE
                             status = 'pending' AND
                             publish_at <= :now
                         ORDER BY publish_at
@@ -193,11 +226,11 @@ readonly class SqlEventStore implements EventStore
         return $row === false ? null : $row;
     }
 
-    private function insertStatusAudit(string $eventId, string $status, ?string $errorMessage = null): void
+    private function insertStatusAudit(PDO $connection, string $eventId, string $status, ?string $errorMessage = null): void
     {
-        $stmt = $this->connection->prepare(
+        $stmt = $connection->prepare(
             <<<SQL
-                INSERT INTO event_outbox_status (event_id, status, error_message, created_at)
+                INSERT INTO {$this->table('event_outbox_status')} (event_id, status, error_message, created_at)
                     VALUES (:event_id, :status, :error_message, :created_at)
                 SQL,
         );
@@ -211,24 +244,24 @@ readonly class SqlEventStore implements EventStore
     }
 
     /** Guards against the implicit-commit case where a DDL statement closed the transaction before the failure. */
-    private function rollBackIfActive(): void
+    private function rollBackIfActive(PDO $connection): void
     {
-        if ($this->connection->inTransaction()) {
-            $this->connection->rollBack();
+        if ($connection->inTransaction()) {
+            $connection->rollBack();
         }
     }
 
-    private function lockingClause(): string
+    private function lockingClause(PDO $connection): string
     {
-        return match ($this->driverName()) {
+        return match ($this->driverName($connection)) {
             'mysql' => 'FOR UPDATE SKIP LOCKED',
             default => '',
         };
     }
 
-    private function driverName(): string
+    private function driverName(PDO $connection): string
     {
         /** @var string */
-        return $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
+        return $connection->getAttribute(PDO::ATTR_DRIVER_NAME);
     }
 }

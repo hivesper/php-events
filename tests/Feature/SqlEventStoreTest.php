@@ -141,6 +141,42 @@ class SqlEventStoreTest extends TestCase
         self::assertTrue(true);
     }
 
+    public function test_add_resolves_the_connection_on_every_call(): void
+    {
+        $resolved = 0;
+        $store = new SqlEventStore(function () use (&$resolved): PDO {
+            $resolved++;
+
+            return $this->pdo;
+        });
+
+        $store->add(self::createEvent('order.placed'));
+        $store->add(self::createEvent('order.shipped'));
+
+        self::assertSame(2, $resolved);
+    }
+
+    public function test_add_and_next_use_the_schema_qualified_tables(): void
+    {
+        $pdo = new PDO('sqlite::memory:');
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->exec("ATTACH DATABASE ':memory:' AS platform");
+        $pdo->exec('CREATE TABLE platform.event_outbox (
+            id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL,
+            payload TEXT NOT NULL, created_at TEXT NOT NULL, publish_at TEXT NOT NULL)');
+        $pdo->exec('CREATE TABLE platform.event_outbox_status (
+            event_id TEXT NOT NULL, status TEXT NOT NULL, error_message TEXT, created_at TEXT NOT NULL)');
+
+        $store = new SqlEventStore($pdo, schema: 'platform');
+        $event = self::createEvent('order.placed', ['order_id' => 99]);
+        $store->add($event);
+
+        $retrieved = $store->next();
+
+        self::assertNotNull($retrieved);
+        self::assertSame($event->id, $retrieved->id);
+    }
+
     /**
      * @param array<string, mixed> $payload
      */
