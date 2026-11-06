@@ -54,6 +54,8 @@ composer require hivesper/php-events
 | `EventStore` | Interface — a durable queue of `RawEvent`, with `add()` / `next()` / `markProcessed()` |
 | `EventSerializer` | Interface — converts a domain event object into a `SerializedEvent` |
 | `EventHydrator` | Interface — reconstructs a domain event object from a stored name + payload |
+| `EventContext` | Value object with the stored event's `eventId`, `eventName` and `createdAt`, handed to listeners that declare a second parameter |
+| `EventContextFactory` | Interface — builds that second argument from the `RawEvent`; swap it to hand listeners your own context class |
 | `SerializedEvent` | Value object holding the event `name` and `payload` array |
 | `EventPublisher` | Serializes a domain event and pushes it into the store, returning its ID |
 | `EventSubscriberMap` | Registry of `name → callable[]` mappings |
@@ -61,7 +63,7 @@ composer require hivesper/php-events
 | `SequentialEventProcessor` | Built-in event processor — runs each subscriber via the supplied `ListenerDispatcher` and calls `markProcessed`. Anything the dispatcher throws propagates out (fail-fast for local/CI); use `RedeliveringListenerDispatcher` to route failures into a `RedeliveryStore` instead. |
 | `SilentEventProcessor` | Decorator — wraps any `EventProcessor` and logs (via PSR-3) any `Throwable` that escapes `process()` instead of letting it propagate. Use in production around the whole batch. |
 | `ListenerDispatcher` | Interface — invokes one (subscriber, event) pair. Returns `void`; lets the listener exception propagate. |
-| `DefaultListenerDispatcher` | Built-in — resolves the handler, hydrates the payload, calls the listener. Swallows exceptions listed in `ignoredExceptions`; otherwise rethrows. Stateless and side-effect-free. |
+| `DefaultListenerDispatcher` | Built-in — resolves the handler, hydrates the payload, calls the listener (with an event context when the listener declares a second parameter). Swallows exceptions listed in `ignoredExceptions`; otherwise rethrows. Stateless and side-effect-free. |
 | `LoggingListenerDispatcher` | Decorator — wraps any `ListenerDispatcher` and on a throw logs at error level via PSR-3 (with the event name and listener key) then rethrows so upstream redelivery scheduling still triggers. Wrap **outside** `DefaultListenerDispatcher` so its `ignoredExceptions` never reach the logger. |
 | `RedeliveringListenerDispatcher` | Decorator — wraps any `ListenerDispatcher` and on a throw schedules a fresh row in the `RedeliveryStore` (attempt 1, retry-now). Used by the event-processing flow only — the redelivery processor must run a plain dispatcher to avoid double-scheduling. |
 | `RedeliveryProcessor` | Interface — drains a `RedeliveryStore`, mirroring `EventProcessor::process()` |
@@ -325,6 +327,38 @@ $processor = new SequentialEventProcessor(
 ```
 
 ---
+
+## Event context
+
+A listener that declares a second parameter also gets the context of the stored event. The event id stays the same when the listener is retried or the event is recovered and dispatched again, so a listener can use it to skip work it already did:
+
+```php
+use Vesper\Tool\Event\EventContext;
+
+final readonly class SendWelcomeEmail
+{
+    public function __invoke(UserRegistered $event, EventContext $context): void
+    {
+        $this->mailer->sendOnce(key: $context->eventId, to: $event->email);
+    }
+}
+```
+
+Listeners with one parameter are called with the event only, as before.
+
+To keep the package's classes out of your application code, implement `EventContextFactory` and pass it to the dispatcher. Listeners then receive whatever the factory returns:
+
+```php
+final readonly class AppEventContextFactory implements EventContextFactory
+{
+    public function create(RawEvent $event): AppEventContext
+    {
+        return new AppEventContext(eventId: $event->id);
+    }
+}
+
+$dispatcher = new DefaultListenerDispatcher(contextFactory: new AppEventContextFactory());
+```
 
 ## Event stores
 
