@@ -3,10 +3,13 @@
 namespace Vesper\Tool\Event\Infrastructure\Dispatch;
 
 use Override;
+use ReflectionFunction;
 use Throwable;
 use Vesper\Tool\Event\Dispatch\ListenerDispatcher;
+use Vesper\Tool\Event\EventContextFactory;
 use Vesper\Tool\Event\EventHydrator;
 use Vesper\Tool\Event\HandlerResolver;
+use Vesper\Tool\Event\Infrastructure\DefaultEventContextFactory;
 use Vesper\Tool\Event\Infrastructure\DefaultHandlerResolver;
 use Vesper\Tool\Event\Infrastructure\JacksonHydrator;
 use Vesper\Tool\Event\RawEvent;
@@ -18,15 +21,20 @@ readonly class DefaultListenerDispatcher implements ListenerDispatcher
         private HandlerResolver $resolver = new DefaultHandlerResolver(),
         private EventHydrator $hydrator = new JacksonHydrator(),
         private array $ignoredExceptions = [],
+        private EventContextFactory $contextFactory = new DefaultEventContextFactory(),
     ) {}
 
     #[Override] public function dispatch(RawEvent $event, callable|string $subscriber): void
     {
         $callable = $this->resolver->resolve($subscriber);
-        $domainEvent = $this->hydrator->hydrate($event->name, $event->payload, $callable);
+        $arguments = [$this->hydrator->hydrate($event->name, $event->payload, $callable)];
+
+        if ($this->acceptsContext($callable)) {
+            $arguments[] = $this->contextFactory->create($event);
+        }
 
         try {
-            $callable($domainEvent);
+            $callable(...$arguments);
         } catch (Throwable $e) {
             if ($this->isIgnored($e)) {
                 return;
@@ -34,6 +42,12 @@ readonly class DefaultListenerDispatcher implements ListenerDispatcher
 
             throw $e;
         }
+    }
+
+    /** Only listeners that declare a second parameter get the context, so one-argument listeners keep working. */
+    private function acceptsContext(callable $callable): bool
+    {
+        return new ReflectionFunction($callable(...))->getNumberOfParameters() >= 2;
     }
 
     private function isIgnored(Throwable $error): bool
